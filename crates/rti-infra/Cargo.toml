@@ -1,23 +1,23 @@
 [package]
-name = "rti-server"
+name = "rti-infra"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "rti-oracle-watchdog"
+path = "src/bin/watchdog.rs"
+
 [dependencies]
 rti-core.workspace = true
-rti-archive.workspace = true
-rti-research.workspace = true
-rti-maps.workspace = true
-rti-media.workspace = true
-rti-llm.workspace = true
+rti-oracle.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tiny_http.workspace = true
-tracing.workspace = true
+ureq.workspace = true
 chrono.workspace = true
+tracing.workspace = true
+tiny_http.workspace = true
 
 [dev-dependencies]
-ureq.workspace = true
 tempfile.workspace = true

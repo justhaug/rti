@@ -240,3 +240,30 @@ pub struct MapRow {
     pub report: Option<serde_json::Value>,
     pub created_at: String,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MediaRow {
+    pub id: String,
+    pub kind: String,
+    pub track_name: String,
+    pub new_trajectory: String,
+    pub old_trajectory: Option<String>,
+    pub score: f64,
+    pub interest: Option<serde_json::Value>,
+    pub job: Option<serde_json::Value>,
+    pub comparison: Option<serde_json::Value>,
+    pub video_path: Option<String>,
+    pub video_hash: Option<String>,
+    pub thumbnail_path: Option<String>,
+    pub title: String,
+    pub description: String,
+    pub explanation: String,
+    pub tags: Vec<String>,
+    /// review | approved | rejected | uploaded | published | failed
+    pub status: String,
+    pub youtube_id: Option<String>,
+    pub verified: bool,
+    pub frames: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}

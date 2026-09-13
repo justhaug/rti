@@ -24,36 +24,83 @@ pub struct CycleReport {
 }
 
 /// Validate and normalise a spec against config limits and archive state.
+/// Validate and normalise a spec against config limits and archive state.
+/// Abbreviated hashes (as shown in the context) are expanded.
 pub fn validate_spec(s: &Session, spec: &mut ExperimentSpec) -> anyhow::Result<()> {
     let cap = s.cfg.budget.max_ticks_per_experiment;
+    let fix_traj = |h: &mut rti_core::ContentHash| -> anyhow::Result<()> {
+        if s.archive.trajectory_row(h)?.is_some() {
+            return Ok(());
+        }
+        match s.archive.resolve_trajectory_hash(h.as_str())? {
+            Some(full) => {
+                *h = full;
+                Ok(())
+            }
+            None => anyhow::bail!("trajectory {h} does not exist"),
+        }
+    };
+    let fix_phys = |h: &mut rti_core::ContentHash| -> anyhow::Result<()> {
+        if s.archive.physics_by_hash(h)?.is_some() {
+            return Ok(());
+        }
+        match s.archive.resolve_physics_hash(h.as_str())? {
+            Some(full) => {
+                *h = full;
+                Ok(())
+            }
+            None => anyhow::bail!("physics {h} does not exist"),
+        }
+    };
     match spec {
         ExperimentSpec::Search {
             track,
             budget_ticks,
             warm_start,
+            physics,
+            params,
             ..
         } => {
             s.track(track)?;
             *budget_ticks = (*budget_ticks).clamp(100_000, cap);
             if let Some(h) = warm_start {
-                if s.archive.trajectory(h)?.is_none() {
-                    anyhow::bail!("warm_start trajectory {h} does not exist");
+                fix_traj(h)?;
+            }
+            if let Some(h) = physics {
+                fix_phys(h)?;
+            }
+            if let Some(m) = &mut params.model {
+                if !s.archive.cas.exists(m) {
+                    let full = s
+                        .archive
+                        .models("policy", 1000)?
+                        .into_iter()
+                        .find(|r| r.hash.starts_with(m.as_str()))
+                        .map(|r| rti_core::ContentHash(r.hash));
+                    match full {
+                        Some(f) => *m = f,
+                        None => anyhow::bail!("model {m} does not exist"),
+                    }
                 }
             }
         }
-        ExperimentSpec::Verify { trajectory } => {
-            if s.archive.trajectory(trajectory)?.is_none() {
-                anyhow::bail!("trajectory {trajectory} does not exist");
-            }
-        }
+        ExperimentSpec::Verify { trajectory } => fix_traj(trajectory)?,
         ExperimentSpec::Calibrate {
             tracks,
             budget_ticks,
             probe_runs,
+            trajectories,
+            physics,
             ..
         } => {
             for t in tracks.iter() {
                 s.track(t)?;
+            }
+            for h in trajectories.iter_mut() {
+                fix_traj(h)?;
+            }
+            if let Some(h) = physics {
+                fix_phys(h)?;
             }
             *budget_ticks = (*budget_ticks).clamp(1_000_000, cap);
             *probe_runs = (*probe_runs).clamp(1, 64);
@@ -318,6 +365,9 @@ pub fn run_cycle_with(s: &Session, brain: &dyn Brain) -> anyhow::Result<CycleRep
         &cost,
     )?;
     tracing::info!(cycle, value = value_total, "cycle done: {}", report.summary);
+    if let Err(e) = s.oracle.maintenance() {
+        tracing::warn!(error = %e, "oracle maintenance failed");
+    }
     Ok(CycleReport {
         cycle,
         brain: brain.name(),

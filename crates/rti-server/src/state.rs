@@ -162,6 +162,20 @@ impl AppState {
                 }
             }
         }
+        match rti_media::scan_and_produce(&s, &s.cfg.media) {
+            Ok(rows) => {
+                for m in rows {
+                    self.push_event(
+                        "media",
+                        &format!(
+                            "video ready for review: {} [{}] score {:.2}",
+                            m.title, m.id, m.score
+                        ),
+                    );
+                }
+            }
+            Err(e) => self.push_event("error", &format!("media scan failed: {e:#}")),
+        }
         let v = serde_json::json!({
             "cycle": r.cycle, "brain": r.brain, "experiment_id": r.experiment_id,
             "hypothesis": r.proposal.hypothesis, "summary": r.report.summary,

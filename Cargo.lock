@@ -1478,8 +1478,10 @@ dependencies = [
  "rti-agent",
  "rti-archive",
  "rti-core",
+ "rti-infra",
  "rti-llm",
  "rti-maps",
+ "rti-media",
  "rti-nn",
  "rti-oracle",
  "rti-research",
@@ -1503,6 +1505,22 @@ dependencies = [
  "thiserror",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "rti-infra"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rti-core",
+ "rti-oracle",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tiny_http",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]
@@ -1533,6 +1551,25 @@ dependencies = [
  "toml",
  "tracing",
  "ureq",
+]
+
+[[package]]
+name = "rti-media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rti-archive",
+ "rti-core",
+ "rti-llm",
+ "rti-research",
+ "rti-sim",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "ureq",
+ "uuid",
 ]
 
 [[package]]
@@ -1574,6 +1611,7 @@ dependencies = [
  "rti-agent",
  "rti-archive",
  "rti-core",
+ "rti-infra",
  "rti-llm",
  "rti-maps",
  "rti-nn",
@@ -1612,6 +1650,7 @@ dependencies = [
  "rti-core",
  "rti-llm",
  "rti-maps",
+ "rti-media",
  "rti-research",
  "serde",
  "serde_json",

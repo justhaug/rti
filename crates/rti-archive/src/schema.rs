@@ -169,6 +169,30 @@ CREATE TABLE IF NOT EXISTS maps (
     report_json TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS media (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    track_name TEXT NOT NULL,
+    new_trajectory TEXT NOT NULL,
+    old_trajectory TEXT,
+    score DOUBLE,
+    interest_json TEXT,
+    job_json TEXT,
+    comparison_json TEXT,
+    video_path TEXT,
+    video_hash TEXT,
+    thumbnail_path TEXT,
+    title TEXT,
+    description TEXT,
+    explanation TEXT,
+    tags_json TEXT,
+    status TEXT NOT NULL,
+    youtube_id TEXT,
+    verified BOOLEAN,
+    frames BIGINT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS cycles (
     id BIGINT PRIMARY KEY,
     started_at TEXT NOT NULL,
@@ -206,5 +230,6 @@ llm_calls(id, role, model, prompt_tokens, completion_tokens, usd, latency_ms, cy
 tasks(id, cycle, kind, title, description, status, priority, branch, result_json, cost_json, created_at, updated_at)
     -- kind: coding|verify|calibrate; status: pending|running|done|failed|merged|rejected
 maps(hash, tmx_id, map_uid, map_name, author, track_name, author_ms, wr_ms, gbx_hash, parsed_hash, tmx_json, report_json, created_at)
+media(id, kind, track_name, new_trajectory, old_trajectory, score, status, title, youtube_id, verified, created_at)
 cycles(id, started_at, finished_at, summary, cost_json, brain, model)
 "#;

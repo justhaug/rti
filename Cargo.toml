@@ -12,6 +12,8 @@ members = [
     "crates/rti-research",
     "crates/rti-cli",
     "crates/rti-maps",
+    "crates/rti-media",
+    "crates/rti-infra",
 ]
 
 [workspace.package]
@@ -32,6 +34,8 @@ rti-agent = { path = "crates/rti-agent" }
 rti-research = { path = "crates/rti-research" }
 rti-server = { path = "crates/rti-server" }
 rti-maps = { path = "crates/rti-maps" }
+rti-media = { path = "crates/rti-media" }
+rti-infra = { path = "crates/rti-infra" }
 
 anyhow = "1"
 thiserror = "2"

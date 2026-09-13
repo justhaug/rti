@@ -28,6 +28,7 @@ pub struct CompileReport {
 /// A placed road piece in world (planar) coordinates.
 #[derive(Clone, Debug)]
 struct Piece {
+    #[allow(dead_code)]
     idx: usize,
     entry: (f32, f32),
     exit: (f32, f32),

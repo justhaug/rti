@@ -50,6 +50,9 @@ canvas{background:#0b0e13;border:1px solid var(--line);border-radius:6px;max-wid
 #modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:20px}
 #modal .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;max-width:900px;width:100%;max-height:90vh;overflow:auto;padding:14px}
 .legend span{display:inline-block;width:12px;height:3px;margin:0 4px 2px 0;vertical-align:middle}
+.card.media.big { border: 1px solid #4fd18b; }
+.badge { display:inline-block; padding:2px 6px; border-radius:4px; background:#2a3140; color:#cfd6e4; font-size:11px; }
+.badge.ok { background:#1f5a3a; color:#bff3d2; }
 </style>
 </head>
 <body>
@@ -79,7 +82,7 @@ canvas{background:#0b0e13;border:1px solid var(--line);border-radius:6px;max-wid
   </section>
   <section id="right">
     <nav id="tabs"></nav>
-    <div id="panel"></div>
+    <div id="discovery"></div><div id="panel"></div>
   </section>
 </main>
 <div id="modal" onclick="if(event.target===this)this.style.display='none'"><div class="box" id="modalbox"></div></div>
@@ -148,7 +151,7 @@ $('#chatin').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shif
 // ---------- tabs ----------
 const tabs = {
   log: renderLog, experiments: renderExperiments, findings: renderFindings, tracks: renderTracks,
-  tasks: renderTasks, ledger: renderLedger, methods: renderMethods, sql: renderSql, context: renderContext,
+  tasks: renderTasks, ledger: renderLedger, methods: renderMethods, sql: renderSql, context: renderContext, media: renderMedia,
 };
 let current = 'log';
 for (const k of Object.keys(tabs)) { const b = document.createElement('button'); b.textContent = k; b.onclick = () => { current = k; render(); }; b.dataset.tab = k; $('#tabs').appendChild(b); }
@@ -255,6 +258,47 @@ async function renderTasks() {
     rows.map(t => '<tr><td>' + esc(t.id) + '</td><td class="' + (t.status === 'merged' || t.status === 'done' ? 'ok' : t.status === 'failed' || t.status === 'rejected' ? 'err' : 'warn') + '">' + esc(t.status) + '</td><td>' + esc(t.kind) + '</td><td>' + t.priority + '</td><td>' + esc(t.cycle ?? '') + '</td><td>' + esc(t.title) + '</td><td class="dim">' + esc(JSON.stringify(t.result_json || '').slice(0, 300)) + '</td></tr>').join('') + '</table>';
 }
 async function addTask() { try { await api('/api/tasks', {kind: 'coding', title: $('#t-title').value, description: $('#t-desc').value, priority: +$('#t-prio').value}); toast('task queued'); render(); } catch (e) { toast(e.message, 'err'); } }
+// ---------- media ----------
+function mediaCard(m, big) {
+  const st = m.status;
+  const badge = m.verified ? '<span class="badge ok">VERIFIED IN ORACLE</span>' : '<span class="badge">sim only</span>';
+  const btns = st === 'review' || st === 'approved'
+    ? '<button onclick="mediaAct(\'' + m.id + '\',\'publish\')">Publish</button> <button onclick="mediaAct(\'' + m.id + '\',\'upload\')">Upload private</button> <button onclick="mediaAct(\'' + m.id + '\',\'approve\')">Approve</button> <button onclick="mediaAct(\'' + m.id + '\',\'reject\')">Ignore</button>'
+    : (m.youtube_id ? '<a href="https://youtube.com/watch?v=' + esc(m.youtube_id) + '" target="_blank">youtube</a>' : '');
+  return '<div class="card media' + (big ? ' big' : '') + '"><div class="dim">' + (big ? '🏁 POTENTIAL DISCOVERY · ' : '') + esc(m.track_name) + ' · score ' + fmt(m.score) + ' · ' + esc(st) + ' ' + badge + '</div>' +
+    '<h3>' + esc(m.title) + '</h3>' +
+    '<video controls preload="metadata" src="/media/' + esc(m.id) + '.mp4" style="max-height:' + (big ? '520' : '360') + 'px;max-width:100%;background:#000"></video>' +
+    '<div style="white-space:pre-wrap" class="dim">' + esc(m.explanation || '') + '</div>' +
+    '<details><summary class="dim">description</summary><pre>' + esc(m.description) + '</pre></details>' +
+    '<div>' + btns + '</div></div>';
+}
+async function mediaAct(id, action) {
+  try { const r = await api('/api/media/' + id + '/' + action, {}); toast(action + ': ' + (r.url || r.status), 'ok'); }
+  catch (e) { toast(action + ' failed: ' + e.message, 'err'); }
+  render(); refreshDiscovery();
+}
+async function refreshDiscovery() {
+  try {
+    const rows = await api('/api/media?n=20');
+    const pending = rows.filter(m => m.status === 'review' || m.status === 'approved');
+    const box = $('#discovery');
+    if (!box) return;
+    box.innerHTML = pending.length ? mediaCard(pending[0], true) + (pending.length > 1 ? '<div class="dim">' + (pending.length - 1) + ' more waiting in the media tab</div>' : '') : '';
+  } catch (e) { /* ignore */ }
+}
+async function renderMedia() {
+  const rows = await api('/api/media?n=100');
+  $('#panel').innerHTML = '<div class="card"><button onclick="mediaScan(true)">Scan verified bests</button> <button onclick="mediaScan(false)">Scan sim bests too</button> <span id="media-status" class="dim"></span></div>' +
+    (rows.length ? rows.map(m => mediaCard(m, false)).join('') : '<div class="dim">no videos yet — they appear when a verified best clears the interestingness threshold</div>');
+}
+async function mediaScan(verifiedOnly) {
+  $('#media-status').textContent = 'rendering…';
+  try { const r = await api('/api/media/scan', {require_verified: verifiedOnly}); $('#media-status').textContent = 'produced ' + r.produced; render(); refreshDiscovery(); }
+  catch (e) { $('#media-status').textContent = 'failed: ' + e.message; }
+}
+setInterval(refreshDiscovery, 15000);
+setTimeout(refreshDiscovery, 500);
+
 async function renderLedger() {
   const l = await api('/api/ledger');
   const row = (k, c) => '<tr><td>' + esc(k) + '</td><td>' + fmt(c.sim_ticks / 1e6, 1) + '</td><td>' + c.oracle_ticks + '</td><td>' + fmt(c.wall_ms / 1000, 1) + '</td><td>' + c.llm_calls + '</td><td>' + fmt(c.llm_usd, 4) + '</td></tr>';

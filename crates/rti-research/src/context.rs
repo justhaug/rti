@@ -33,6 +33,10 @@ pub fn build_context(s: &Session) -> anyhow::Result<String> {
         s.cfg.budget.max_total_usd,
         s.cfg.budget.max_usd_per_cycle
     );
+    let _ = writeln!(
+        out,
+        "(hashes may be abbreviated to a unique prefix in specs)"
+    );
     let _ = writeln!(out, "current physics: {} (version {}); sim/oracle verifications: {} (mean pos err {:.2} m, mean |Δt| {:.0} ms); disagreement threshold {:.1} m\n", phash.short(), physics.hash().short(), vstats.n, vstats.mean_pos_err, vstats.mean_abs_time_diff_ms, s.cfg.oracle.disagreement_threshold_m);
 
     let _ = writeln!(out, "## Tracks (best sim time / best verified time)");

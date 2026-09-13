@@ -49,6 +49,30 @@ pub fn handle(state: &Arc<AppState>, mut req: Request) {
         let _ = req.respond(r);
         return;
     }
+    if let Some(rest) = path.strip_prefix("/media/") {
+        // serve rendered videos: /media/<id>.mp4
+        let id = rest.trim_end_matches(".mp4");
+        let file = {
+            let s = state.session.lock().unwrap();
+            s.archive
+                .media_by_id(id)
+                .ok()
+                .flatten()
+                .and_then(|m| m.video_path)
+        };
+        match file.and_then(|f| std::fs::read(&f).ok()) {
+            Some(bytes) => {
+                let r = Response::from_data(bytes)
+                    .with_header(Header::from_bytes("Content-Type", "video/mp4").unwrap())
+                    .with_header(Header::from_bytes("Accept-Ranges", "none").unwrap());
+                let _ = req.respond(r);
+            }
+            None => {
+                let _ = req.respond(json_response(404, &err("no such media".to_string())));
+            }
+        }
+        return;
+    }
     let (status, v) = match route(state, &method, &path, &url, &body) {
         Ok(v) => (200, v),
         Err(e) => (400, err(format!("{e:#}"))),
@@ -131,6 +155,66 @@ fn route(
                 }
                 None => Ok(json!({"id": null, "result": "no pending tasks"})),
             }
+        }
+        (["api", "media"], true, _) => {
+            let s = state.session.lock().unwrap();
+            Ok(serde_json::to_value(s.archive.media(n_param(url, 50))?)?)
+        }
+        (["api", "media", "scan"], _, true) => {
+            let s = state.session.lock().unwrap();
+            let mut cfg = s.cfg.media.clone();
+            let b = body_json(body)?;
+            if let Some(v) = b["require_verified"].as_bool() {
+                cfg.require_verified = v;
+            }
+            if let Some(t) = b["threshold"].as_f64() {
+                cfg.weights.threshold = t;
+            }
+            let rows = rti_media::scan_and_produce(&s, &cfg)?;
+            for m in &rows {
+                state.push_event(
+                    "media",
+                    &format!("video ready for review: {} [{}]", m.title, m.id),
+                );
+            }
+            Ok(json!({"produced": rows.len(), "media": rows}))
+        }
+        (["api", "media", "candidates"], true, _) => {
+            let s = state.session.lock().unwrap();
+            let require_verified = !url.contains("all=1");
+            Ok(serde_json::to_value(rti_media::scan(
+                &s,
+                &s.cfg.media.weights,
+                require_verified,
+            )?)?)
+        }
+        (["api", "media", id, action], _, true) => {
+            let s = state.session.lock().unwrap();
+            let row = s
+                .archive
+                .media_by_id(id)?
+                .ok_or_else(|| anyhow::anyhow!("no media {id}"))?;
+            let result = match *action {
+                "approve" => {
+                    s.archive.update_media(id, "approved", None)?;
+                    json!({"status": "approved"})
+                }
+                "reject" => {
+                    s.archive.update_media(id, "rejected", None)?;
+                    json!({"status": "rejected"})
+                }
+                "upload" => {
+                    let vid = rti_media::pipeline::upload(&s, &s.cfg.media, id, false)?;
+                    json!({"status": "uploaded", "youtube_id": vid})
+                }
+                "publish" => {
+                    let vid = rti_media::pipeline::upload(&s, &s.cfg.media, id, true)?;
+                    json!({"status": "published", "youtube_id": vid, "url": format!("https://youtube.com/shorts/{vid}")})
+                }
+                other => anyhow::bail!("unknown media action {other}"),
+            };
+            state.push_event("media", &format!("{} {}: {}", action, id, row.title));
+            Ok(result)
         }
         (["api", "maps"], true, _) => {
             let s = state.session.lock().unwrap();

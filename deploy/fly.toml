@@ -1,0 +1,32 @@
+# Fly.io app for the RTI coordinator (persistent, cheap, always on).
+#   fly launch --no-deploy --copy-config --name rti
+#   fly volumes create rti_data --size 20 --region iad
+#   fly secrets set OPENROUTER_API_KEY=... RUNPOD_API_KEY=... FLY_API_TOKEN=...
+#   fly deploy --dockerfile deploy/Dockerfile
+app = "rti"
+primary_region = "iad"
+
+[build]
+  dockerfile = "deploy/Dockerfile"
+
+[env]
+  RTI_ROOT = "/data/project"
+  PORT = "8787"
+  RUST_LOG = "info"
+
+[[mounts]]
+  source = "rti_data"
+  destination = "/data"
+
+# Private by default: reach the UI with `fly proxy 8787:8787` or WireGuard.
+# Uncomment [http_service] to expose it publicly (add auth first).
+# [http_service]
+#   internal_port = 8787
+#   force_https = true
+#   auto_stop_machines = false
+#   auto_start_machines = false
+#   min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

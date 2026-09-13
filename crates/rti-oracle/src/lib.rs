@@ -35,6 +35,11 @@ pub trait Oracle: Send + Sync {
     /// Rough wall-clock cost per simulated tick (for the ledger and for
     /// deciding when verification is worth it). Real-time game = 10 ms/tick.
     fn ms_per_tick(&self) -> f64;
+    /// Periodic housekeeping (e.g. stop a cloud oracle that has been idle).
+    /// Called by long-running loops between cycles.
+    fn maintenance(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 pub fn from_config(cfg: &OracleConfig) -> anyhow::Result<Box<dyn Oracle>> {
@@ -60,15 +65,28 @@ pub struct Verification {
 /// Replay `traj.actions` in both the given sim and the oracle and compare.
 pub fn verify(oracle: &dyn Oracle, sim: &Sim, traj: &Trajectory) -> anyhow::Result<Verification> {
     let max_ticks = sim.geom.track.max_ticks;
-    let sim_run = rollout(sim, &sim.initial_state(), &traj.actions, max_ticks, true);
-    let orun = oracle.run(&sim.geom.track, &traj.actions, max_ticks)?;
+    // The oracle may be slower than the sim: hold the last input for a
+    // while past the sim's finish so a slightly slower oracle run can still
+    // reach the line instead of being cut off (a DNF for the wrong reason).
+    let mut actions = traj.actions.clone();
+    let pad = ((actions.len() as f32 * 0.3) as usize).max(300);
+    if let Some(&last) = actions.last() {
+        let hold = rti_core::Action {
+            steer: last.steer,
+            gas: true,
+            brake: false,
+        };
+        actions.extend(std::iter::repeat_n(hold, pad));
+    }
+    let sim_run = rollout(sim, &sim.initial_state(), &actions, max_ticks, true);
+    let orun = oracle.run(&sim.geom.track, &actions, max_ticks)?;
     let divergence =
         Divergence::compute(&sim_run.states, &orun.states, &sim_run.result, &orun.result);
     let oracle_trajectory = Trajectory {
         track_hash: sim.geom.track.hash(),
         track_name: sim.geom.track.name.clone(),
         world: format!("oracle:{}", oracle.name()),
-        actions: traj.actions.clone(),
+        actions,
         states: orun.states,
         result: orun.result,
         method: format!("verify:{}", traj.method),

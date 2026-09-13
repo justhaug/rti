@@ -16,6 +16,8 @@ pub struct RtiConfig {
     pub oracle: OracleConfig,
     pub agent: AgentConfig,
     pub research: ResearchConfig,
+    pub media: MediaConfig,
+    pub cloud: CloudConfig,
 }
 
 impl Default for RtiConfig {
@@ -29,6 +31,80 @@ impl Default for RtiConfig {
             oracle: OracleConfig::default(),
             agent: AgentConfig::default(),
             research: ResearchConfig::default(),
+            media: MediaConfig::default(),
+            cloud: CloudConfig::default(),
+        }
+    }
+}
+
+/// Cloud topology: a persistent coordinator (Fly Machine or any VM), a
+/// stopped-by-default GPU oracle pod (Runpod) that RTI starts only for
+/// verification/rendering, disposable Fly worker machines for heavy CPU
+/// experiments, and an S3/R2 bucket for artifacts. All spending is capped.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloudConfig {
+    /// "none" | "runpod" | "aws" — who hosts the TM2020 oracle.
+    pub provider_oracle: String,
+    pub runpod_api_key_env: String,
+    pub runpod_pod_id: String,
+    pub runpod_api_url: String,
+    pub fly_api_token_env: String,
+    pub fly_api_url: String,
+    pub fly_app: String,
+    pub fly_worker_image: String,
+    pub fly_worker_size: String,
+    pub fly_region: String,
+    pub s3_bucket: String,
+    /// S3-compatible endpoint (Cloudflare R2: https://<account>.r2.cloudflarestorage.com).
+    pub s3_endpoint: String,
+    pub s3_prefix: String,
+    /// Shell template used for object sync; `{src}` and `{dst}` are substituted.
+    pub sync_command: String,
+    /// Stop the oracle pod after this many minutes without activity.
+    pub oracle_idle_shutdown_minutes: u64,
+    pub oracle_boot_timeout_secs: u64,
+    /// Watchdog HTTP port on the oracle pod (heartbeats / health).
+    pub oracle_watchdog_port: u16,
+    pub oracle_daily_hours: f64,
+    pub max_oracle_instances: u32,
+    pub max_parallel_workers: u32,
+    pub compute_daily_usd: f64,
+    pub compute_monthly_usd: f64,
+    pub openrouter_daily_usd: f64,
+    pub openrouter_monthly_usd: f64,
+    /// Any single spend above this needs a human approval.
+    pub require_approval_above_usd: f64,
+}
+
+impl Default for CloudConfig {
+    fn default() -> Self {
+        CloudConfig {
+            provider_oracle: "none".into(),
+            runpod_api_key_env: "RUNPOD_API_KEY".into(),
+            runpod_pod_id: String::new(),
+            runpod_api_url: "https://api.runpod.io/graphql".into(),
+            fly_api_token_env: "FLY_API_TOKEN".into(),
+            fly_api_url: "https://api.machines.dev/v1".into(),
+            fly_app: "rti".into(),
+            fly_worker_image: "registry.fly.io/rti:latest".into(),
+            fly_worker_size: "performance-4x".into(),
+            fly_region: "iad".into(),
+            s3_bucket: String::new(),
+            s3_endpoint: String::new(),
+            s3_prefix: "rti".into(),
+            sync_command: "rclone sync {src} {dst}".into(),
+            oracle_idle_shutdown_minutes: 10,
+            oracle_boot_timeout_secs: 600,
+            oracle_watchdog_port: 27016,
+            oracle_daily_hours: 2.0,
+            max_oracle_instances: 1,
+            max_parallel_workers: 4,
+            compute_daily_usd: 5.0,
+            compute_monthly_usd: 75.0,
+            openrouter_daily_usd: 2.0,
+            openrouter_monthly_usd: 30.0,
+            require_approval_above_usd: 10.0,
         }
     }
 }
@@ -55,7 +131,8 @@ impl Default for LlmConfig {
         let mut roles = BTreeMap::new();
         roles.insert("researcher".into(), "z-ai/glm-5.3-flash".into());
         roles.insert("coder".into(), "z-ai/glm-5.3-flash".into());
-        roles.insert("critic".into(), "z-ai/glm-5.3".into());
+        roles.insert("critic".into(), "z-ai/glm-5.3-flash".into());
+        roles.insert("operator".into(), "z-ai/glm-5.3-flash".into());
         roles.insert("escalation".into(), "anthropic/claude-opus-5".into());
         LlmConfig {
             base_url: "https://openrouter.ai/api/v1".into(),
@@ -217,5 +294,88 @@ impl RtiConfig {
 
     pub fn to_toml(&self) -> String {
         toml::to_string_pretty(self).unwrap_or_default()
+    }
+}
+
+/// Interestingness weights for media generation:
+/// I = w1·WR improvement + w2·technique novelty + w3·leaderboard significance + w4·visual weirdness
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InterestWeights {
+    pub wr_improvement: f64,
+    pub technique_novelty: f64,
+    pub leaderboard_significance: f64,
+    pub visual_weirdness: f64,
+    /// Produce media when the weighted score reaches this.
+    pub threshold: f64,
+}
+
+impl Default for InterestWeights {
+    fn default() -> Self {
+        InterestWeights {
+            wr_improvement: 1.0,
+            technique_novelty: 1.0,
+            leaderboard_significance: 1.0,
+            visual_weirdness: 0.7,
+            threshold: 0.6,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct YoutubeConfig {
+    pub client_id_env: String,
+    pub client_secret_env: String,
+    pub refresh_token_env: String,
+    /// "private" (default), "unlisted" or "public" for the initial upload.
+    pub upload_privacy: String,
+    pub category_id: String,
+}
+
+impl Default for YoutubeConfig {
+    fn default() -> Self {
+        YoutubeConfig {
+            client_id_env: "YOUTUBE_CLIENT_ID".into(),
+            client_secret_env: "YOUTUBE_CLIENT_SECRET".into(),
+            refresh_token_env: "YOUTUBE_REFRESH_TOKEN".into(),
+            upload_privacy: "private".into(),
+            category_id: "20".into(),
+        }
+    }
+}
+
+/// `[media]`: automatic video generation and publishing.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaConfig {
+    pub enabled: bool,
+    /// Only make videos for oracle-verified runs.
+    pub require_verified: bool,
+    pub weights: InterestWeights,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub crf: u32,
+    pub youtube: YoutubeConfig,
+    /// Publish automatically when score ≥ auto_publish_threshold and verified.
+    pub auto_publish: bool,
+    pub auto_publish_threshold: f64,
+}
+
+impl Default for MediaConfig {
+    fn default() -> Self {
+        MediaConfig {
+            enabled: true,
+            require_verified: true,
+            weights: InterestWeights::default(),
+            width: 1080,
+            height: 1920,
+            fps: 30,
+            crf: 23,
+            youtube: YoutubeConfig::default(),
+            auto_publish: false,
+            auto_publish_threshold: 1.5,
+        }
     }
 }

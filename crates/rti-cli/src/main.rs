@@ -112,6 +112,16 @@ enum Cmd {
     Oracle,
     /// Export a trajectory (inputs as TAS-style runs) to stdout.
     Export { trajectory: String },
+    /// Cloud lifecycle: oracle pod start/stop/status, Fly workers, artifact sync.
+    Cloud {
+        #[command(subcommand)]
+        cmd: CloudCmd,
+    },
+    /// Videos: detect interesting verified results, render, review, publish.
+    Media {
+        #[command(subcommand)]
+        cmd: MediaCmd,
+    },
     /// Real TM2020 maps: search Trackmania Exchange, import into the simulator.
     Map {
         #[command(subcommand)]
@@ -141,6 +151,44 @@ enum TrackCmd {
 }
 
 #[derive(Subcommand)]
+enum MediaCmd {
+    /// Score candidates (verified bests by default) without rendering.
+    Candidates {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Detect candidates above the threshold and render their videos.
+    Scan {
+        /// Include unverified sim bests.
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        threshold: Option<f64>,
+    },
+    /// Render a video for a specific track's best run (ignores threshold).
+    Render {
+        track: String,
+        #[arg(long)]
+        all: bool,
+    },
+    List,
+    Approve {
+        id: String,
+    },
+    Reject {
+        id: String,
+    },
+    /// Upload to YouTube as private.
+    Upload {
+        id: String,
+    },
+    /// Upload (if needed) and set public.
+    Publish {
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum MapCmd {
     /// Search Trackmania Exchange.
     Search {
@@ -163,6 +211,51 @@ enum MapCmd {
     /// Parse a .Map.Gbx and print what was decoded (no archive changes).
     Inspect { file: PathBuf },
     /// List imported maps.
+    List,
+}
+
+#[derive(Subcommand)]
+enum CloudCmd {
+    /// Provider + budget summary.
+    Status,
+    /// TM2020 oracle pod control.
+    Oracle {
+        #[command(subcommand)]
+        cmd: OracleCmd,
+    },
+    /// Disposable Fly worker machines.
+    Worker {
+        #[command(subcommand)]
+        cmd: WorkerCmd,
+    },
+    /// Mirror cas/ and DuckDB snapshots to/from the bucket (run with the server stopped).
+    Sync {
+        #[arg(long)]
+        pull: bool,
+        /// Skip the DuckDB snapshot when pushing.
+        #[arg(long)]
+        no_snapshot: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum OracleCmd {
+    Start,
+    Stop,
+    Status,
+}
+
+#[derive(Subcommand)]
+enum WorkerCmd {
+    /// Spawn a worker running `rti <args>` (args after `--`).
+    Spawn {
+        #[arg(long, default_value_t = 0.5)]
+        hours: f64,
+        #[arg(long)]
+        wait: bool,
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
     List,
 }
 
@@ -420,6 +513,19 @@ fn main() -> anyhow::Result<()> {
                     while let Some((id, msg)) = rti_research::tasks::run_next_task(&s)? {
                         println!("  task {id}: {msg}");
                     }
+                    match rti_media::scan_and_produce(&s, &s.cfg.media) {
+                        Ok(rows) => {
+                            for m in rows {
+                                println!(
+                                    "  🎬 video ready for review: {} [{}] {}",
+                                    m.title,
+                                    m.id,
+                                    m.video_path.unwrap_or_default()
+                                );
+                            }
+                        }
+                        Err(e) => eprintln!("  media scan failed: {e:#}"),
+                    }
                 }
                 i += 1;
                 if cycles != 0 && i >= cycles {
@@ -554,6 +660,155 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Serve { port } => {
             rti_server::serve(&root, port)?;
+        }
+        Cmd::Cloud { cmd } => {
+            let cfg = RtiConfig::load(&root)?;
+            match cmd {
+                CloudCmd::Status => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&rti_infra::status(&cfg.cloud, &cfg.data_dir))?
+                ),
+                CloudCmd::Oracle { cmd } => {
+                    let oracle = rti_oracle::from_config(&cfg.oracle)?;
+                    let life = rti_infra::OracleLifecycle::new(
+                        &cfg.cloud,
+                        &cfg.data_dir,
+                        oracle,
+                        &cfg.oracle.tm2020_host,
+                    );
+                    match cmd {
+                        OracleCmd::Start => {
+                            life.ensure_up()?;
+                            println!("oracle {} is up", life.oracle().name());
+                        }
+                        OracleCmd::Stop => {
+                            life.stop()?;
+                            println!("oracle stop requested");
+                        }
+                        OracleCmd::Status => {
+                            let st = rti_infra::status(&cfg.cloud, &cfg.data_dir);
+                            println!("{}", serde_json::to_string_pretty(&st)?);
+                            println!(
+                                "bridge reachable: {}",
+                                life.oracle()
+                                    .available()
+                                    .map(|_| "yes".to_string())
+                                    .unwrap_or_else(|e| format!("no ({e})"))
+                            );
+                        }
+                    }
+                }
+                CloudCmd::Worker { cmd } => match cmd {
+                    WorkerCmd::Spawn { hours, wait, args } => {
+                        let budget = rti_infra::Budget::open(&cfg.cloud, &cfg.data_dir);
+                        let mut full = vec!["rti".to_string()];
+                        full.extend(args);
+                        let h = rti_infra::spawn_worker(
+                            &cfg.cloud,
+                            &budget,
+                            &full,
+                            Default::default(),
+                            hours,
+                        )?;
+                        println!("spawned {} ({})", h.name, h.machine_id);
+                        if wait {
+                            let m = rti_infra::workers::await_worker(
+                                &cfg.cloud,
+                                &h,
+                                std::time::Duration::from_secs((hours * 3600.0) as u64 + 600),
+                            )?;
+                            println!("worker finished: state {} exit {:?}", m.state, m.exit_code);
+                        }
+                    }
+                    WorkerCmd::List => {
+                        let fly = rti_infra::FlyClient::from_config(&cfg.cloud)?;
+                        for m in fly.list_machines(&cfg.cloud.fly_app)? {
+                            println!("{:<16} {:<24} {:<10} {}", m.id, m.name, m.state, m.region);
+                        }
+                    }
+                },
+                CloudCmd::Sync { pull, no_snapshot } => {
+                    if pull {
+                        rti_infra::sync::sync_pull(&cfg.cloud, &cfg.data_dir)?;
+                    } else {
+                        rti_infra::sync::sync_push(&cfg.cloud, &cfg.data_dir, !no_snapshot)?;
+                    }
+                    println!("sync done");
+                }
+            }
+        }
+        Cmd::Media { cmd } => {
+            let s = Session::open(&root)?;
+            match cmd {
+                MediaCmd::Candidates { all } => {
+                    for c in rti_media::scan(&s, &s.cfg.media.weights, !all)? {
+                        println!(
+                            "{:<20} score {:.2} {} new {} ms old {:?} ref {:?}: {}",
+                            c.track_name,
+                            c.interest.score,
+                            if c.verified { "verified" } else { "sim" },
+                            c.new_time_ms,
+                            c.old_time_ms,
+                            c.reference_label,
+                            c.interest.reasons.join(", ")
+                        );
+                    }
+                }
+                MediaCmd::Scan { all, threshold } => {
+                    let mut cfg = s.cfg.media.clone();
+                    cfg.require_verified = !all;
+                    if let Some(t) = threshold {
+                        cfg.weights.threshold = t;
+                    }
+                    for m in rti_media::scan_and_produce(&s, &cfg)? {
+                        println!(
+                            "{} [{}] {} frames → {}",
+                            m.id,
+                            m.track_name,
+                            m.frames,
+                            m.video_path.unwrap_or_default()
+                        );
+                        println!("  {}", m.title);
+                    }
+                }
+                MediaCmd::Render { track, all } => {
+                    let cands = rti_media::scan(&s, &s.cfg.media.weights, !all)?;
+                    let c = cands.into_iter().find(|c| c.track_name == track).ok_or_else(|| anyhow::anyhow!("no fresh candidate on {track} (already rendered, or no finished run)"))?;
+                    let m = rti_media::produce(&s, &s.cfg.media, &c)?;
+                    println!(
+                        "{} {} frames → {}
+{}",
+                        m.id,
+                        m.frames,
+                        m.video_path.unwrap_or_default(),
+                        m.title
+                    );
+                }
+                MediaCmd::List => {
+                    for m in s.archive.media(100)? {
+                        println!(
+                            "{} {:<10} {:<16} score {:.2} {} {} {}",
+                            m.id,
+                            m.status,
+                            m.track_name,
+                            m.score,
+                            if m.verified { "verified" } else { "sim" },
+                            m.youtube_id.map(|v| format!("yt:{v}")).unwrap_or_default(),
+                            m.title
+                        );
+                    }
+                }
+                MediaCmd::Approve { id } => s.archive.update_media(&id, "approved", None)?,
+                MediaCmd::Reject { id } => s.archive.update_media(&id, "rejected", None)?,
+                MediaCmd::Upload { id } => println!(
+                    "uploaded: https://youtube.com/watch?v={}",
+                    rti_media::pipeline::upload(&s, &s.cfg.media, &id, false)?
+                ),
+                MediaCmd::Publish { id } => println!(
+                    "published: https://youtube.com/shorts/{}",
+                    rti_media::pipeline::upload(&s, &s.cfg.media, &id, true)?
+                ),
+            }
         }
         Cmd::Map { cmd } => match cmd {
             MapCmd::Search {

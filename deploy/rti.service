@@ -1,0 +1,21 @@
+# systemd unit for a plain Linux VM. Install:
+#   sudo cp deploy/rti.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now rti
+[Unit]
+Description=RTI (Recursive Trackmania Intelligence) coordinator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rti
+WorkingDirectory=/data/rti/project
+EnvironmentFile=-/etc/rti/env
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/rti serve --port 8787
+Restart=always
+RestartSec=5
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

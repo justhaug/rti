@@ -55,7 +55,20 @@ impl Session {
 
     pub fn with_config(root: &Path, cfg: RtiConfig) -> anyhow::Result<Session> {
         let archive = Archive::open(&cfg.data_dir)?;
-        let oracle = rti_oracle::from_config(&cfg.oracle)?;
+        let raw_oracle = rti_oracle::from_config(&cfg.oracle)?;
+        // Cloud-hosted oracles get boot/idle/budget management; a local or
+        // hidden-sim oracle passes through untouched.
+        let oracle: Box<dyn Oracle> =
+            if cfg.cloud.provider_oracle != "none" && cfg.oracle.kind == "tm2020" {
+                Box::new(rti_infra::ManagedOracle::new(
+                    &cfg.cloud,
+                    &cfg.data_dir,
+                    raw_oracle,
+                    &cfg.oracle.tm2020_host,
+                ))
+            } else {
+                raw_oracle
+            };
         let usage = std::sync::Arc::new(UsageBuffer::default());
         let llm = LlmClient::new(&cfg.llm).with_sink(Box::new(SharedUsage(usage.clone())));
         if cfg.budget.threads > 0 {

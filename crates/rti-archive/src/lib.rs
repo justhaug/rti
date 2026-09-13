@@ -137,6 +137,121 @@ impl Archive {
         Ok(())
     }
 
+    /// Resolve a (possibly abbreviated) trajectory hash to the full hash.
+    pub fn resolve_trajectory_hash(&self, prefix: &str) -> anyhow::Result<Option<ContentHash>> {
+        let p = prefix.trim().trim_end_matches('…');
+        if p.len() < 6 {
+            return Ok(None);
+        }
+        let mut st = self.conn.prepare("SELECT hash FROM trajectories WHERE hash LIKE ? || '%' ORDER BY created_at DESC LIMIT 1")?;
+        let r: Option<String> = st.query_row(params![p], |r| r.get(0)).ok();
+        Ok(r.map(ContentHash))
+    }
+
+    /// Resolve a (possibly abbreviated) physics hash to the full hash.
+    pub fn resolve_physics_hash(&self, prefix: &str) -> anyhow::Result<Option<ContentHash>> {
+        let p = prefix.trim().trim_end_matches('…');
+        if p.len() < 6 {
+            return Ok(None);
+        }
+        let mut st = self.conn.prepare(
+            "SELECT hash FROM physics WHERE hash LIKE ? || '%' ORDER BY created_at DESC LIMIT 1",
+        )?;
+        let r: Option<String> = st.query_row(params![p], |r| r.get(0)).ok();
+        Ok(r.map(ContentHash))
+    }
+
+    pub fn insert_media(&self, m: &MediaRow) -> anyhow::Result<()> {
+        let ts = now();
+        self.conn.execute(
+            "INSERT INTO media (id, kind, track_name, new_trajectory, old_trajectory, score, interest_json, job_json, comparison_json, video_path, video_hash, thumbnail_path, title, description, explanation, tags_json, status, youtube_id, verified, frames, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET status = excluded.status, title = excluded.title, description = excluded.description, updated_at = excluded.updated_at",
+            params![
+                m.id,
+                m.kind,
+                m.track_name,
+                m.new_trajectory,
+                m.old_trajectory,
+                m.score,
+                m.interest.as_ref().map(|v| v.to_string()),
+                m.job.as_ref().map(|v| v.to_string()),
+                m.comparison.as_ref().map(|v| v.to_string()),
+                m.video_path,
+                m.video_hash,
+                m.thumbnail_path,
+                m.title,
+                m.description,
+                m.explanation,
+                serde_json::to_string(&m.tags)?,
+                m.status,
+                m.youtube_id,
+                m.verified,
+                m.frames,
+                ts,
+                ts
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_media(
+        &self,
+        id: &str,
+        status: &str,
+        youtube_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE media SET status = ?, youtube_id = COALESCE(?, youtube_id), updated_at = ? WHERE id = ?",
+            params![status, youtube_id, now(), id],
+        )?;
+        Ok(())
+    }
+
+    pub fn media(&self, n: usize) -> anyhow::Result<Vec<MediaRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT id, kind, track_name, new_trajectory, old_trajectory, score, interest_json, job_json, comparison_json, video_path, video_hash, thumbnail_path, title, description, explanation, tags_json, status, youtube_id, verified, frames, created_at, updated_at FROM media ORDER BY created_at DESC LIMIT ?",
+        )?;
+        let rows = st
+            .query_map(params![n as i64], |r| {
+                let js = |i: usize| -> Result<Option<serde_json::Value>, duckdb::Error> {
+                    let s: Option<String> = r.get(i)?;
+                    Ok(s.and_then(|t| serde_json::from_str(&t).ok()))
+                };
+                let tags: Option<String> = r.get(15)?;
+                Ok(MediaRow {
+                    id: r.get(0)?,
+                    kind: r.get(1)?,
+                    track_name: r.get(2)?,
+                    new_trajectory: r.get(3)?,
+                    old_trajectory: r.get(4)?,
+                    score: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                    interest: js(6)?,
+                    job: js(7)?,
+                    comparison: js(8)?,
+                    video_path: r.get(9)?,
+                    video_hash: r.get(10)?,
+                    thumbnail_path: r.get(11)?,
+                    title: r.get::<_, Option<String>>(12)?.unwrap_or_default(),
+                    description: r.get::<_, Option<String>>(13)?.unwrap_or_default(),
+                    explanation: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+                    tags: tags
+                        .and_then(|t| serde_json::from_str(&t).ok())
+                        .unwrap_or_default(),
+                    status: r.get(16)?,
+                    youtube_id: r.get(17)?,
+                    verified: r.get::<_, Option<bool>>(18)?.unwrap_or(false),
+                    frames: r.get::<_, Option<i64>>(19)?.unwrap_or(0),
+                    created_at: r.get(20)?,
+                    updated_at: r.get(21)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn media_by_id(&self, id: &str) -> anyhow::Result<Option<MediaRow>> {
+        Ok(self.media(100_000)?.into_iter().find(|m| m.id == id))
+    }
+
     pub fn maps(&self, n: usize) -> anyhow::Result<Vec<MapRow>> {
         let mut st = self.conn.prepare(
             "SELECT hash, tmx_id, map_uid, map_name, author, track_name, author_ms, wr_ms, gbx_hash, parsed_hash, tmx_json, report_json, created_at FROM maps ORDER BY created_at DESC LIMIT ?",
