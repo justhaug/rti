@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rti-core",
+    "crates/rti-sim",
+    "crates/rti-search",
+    "crates/rti-nn",
+    "crates/rti-archive",
+    "crates/rti-oracle",
+    "crates/rti-llm",
+    "crates/rti-agent",
+    "crates/rti-research",
+    "crates/rti-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/justhaug/rti"
+
+[workspace.dependencies]
+rti-core = { path = "crates/rti-core" }
+rti-sim = { path = "crates/rti-sim" }
+rti-search = { path = "crates/rti-search" }
+rti-nn = { path = "crates/rti-nn" }
+rti-archive = { path = "crates/rti-archive" }
+rti-oracle = { path = "crates/rti-oracle" }
+rti-llm = { path = "crates/rti-llm" }
+rti-agent = { path = "crates/rti-agent" }
+rti-research = { path = "crates/rti-research" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+rand = "0.9"
+rand_distr = "0.5"
+rayon = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+duckdb = { version = "1.10505", features = ["bundled"] }
+ureq = { version = "3", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tempfile = "3"
+walkdir = "2"
+similar = "2"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+debug = 1
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

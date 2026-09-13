@@ -1,0 +1,7 @@
+/target
+/data
+/.rti
+*.duckdb
+*.duckdb.wal
+.env
+__pycache__/

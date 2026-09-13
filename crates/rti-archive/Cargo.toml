@@ -1,0 +1,18 @@
+[package]
+name = "rti-archive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rti-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+duckdb.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
