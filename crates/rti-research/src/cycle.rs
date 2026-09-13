@@ -105,6 +105,16 @@ pub fn validate_spec(s: &Session, spec: &mut ExperimentSpec) -> anyhow::Result<(
             *budget_ticks = (*budget_ticks).clamp(1_000_000, cap);
             *probe_runs = (*probe_runs).clamp(1, 64);
         }
+        ExperimentSpec::CalibrateReplays {
+            tracks,
+            generations,
+            ..
+        } => {
+            for t in tracks.iter() {
+                s.track(t)?;
+            }
+            *generations = (*generations).clamp(1, 200);
+        }
         ExperimentSpec::TrainBc {
             tracks,
             epochs,
