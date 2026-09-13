@@ -34,10 +34,11 @@ fn savestate_resume_matches_full_run() {
         })
         .collect();
     let full = rollout(&s, &s.initial_state(), &acts, 2000, true);
-    let mid = full.states[900];
-    let resumed = rollout(&s, &mid, &acts[900..], 2000, true);
+    let m = full.states.len() / 2;
+    let mid = full.states[m];
+    let resumed = rollout(&s, &mid, &acts[m..], 2000, true);
     let n = resumed.states.len();
-    assert_eq!(&full.states[900..900 + n], &resumed.states[..]);
+    assert_eq!(&full.states[m..m + n], &resumed.states[..]);
 }
 
 #[test]

@@ -103,7 +103,9 @@ fn compiles_synthetic_chain() {
     assert_eq!(track.checkpoints.len(), 1);
     assert!(track.finish.is_some());
     assert!(
-        (track.length() - (32.0 * 4.0 + std::f32::consts::FRAC_PI_2 * 16.0 + 32.0 * 3.0)).abs()
+        // the car spawns 30 m into the start block, so the compiled track is 30 m shorter
+        (track.length() - (32.0 * 4.0 + std::f32::consts::FRAC_PI_2 * 16.0 + 32.0 * 3.0 - 30.0))
+            .abs()
             < 12.0,
         "len {}",
         track.length()
