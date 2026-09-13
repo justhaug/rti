@@ -1,0 +1,19 @@
+[package]
+name = "rti-maps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rti-sim.workspace = true
+rti-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+ureq.workspace = true
+blake3.workspace = true
+tracing.workspace = true
+lzokay = "2"
+thiserror.workspace = true
+regex = "1"

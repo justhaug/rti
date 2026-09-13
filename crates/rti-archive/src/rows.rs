@@ -223,3 +223,20 @@ impl TaskRow {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MapRow {
+    pub hash: String,
+    pub tmx_id: Option<i64>,
+    pub map_uid: String,
+    pub map_name: String,
+    pub author: String,
+    pub track_name: String,
+    pub author_ms: Option<i64>,
+    pub wr_ms: Option<i64>,
+    pub gbx_hash: Option<String>,
+    pub parsed_hash: Option<String>,
+    pub tmx: Option<serde_json::Value>,
+    pub report: Option<serde_json::Value>,
+    pub created_at: String,
+}

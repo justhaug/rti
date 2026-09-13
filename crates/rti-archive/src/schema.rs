@@ -154,6 +154,21 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS maps (
+    hash TEXT PRIMARY KEY,
+    tmx_id BIGINT,
+    map_uid TEXT,
+    map_name TEXT,
+    author TEXT,
+    track_name TEXT,
+    author_ms BIGINT,
+    wr_ms BIGINT,
+    gbx_hash TEXT,
+    parsed_hash TEXT,
+    tmx_json TEXT,
+    report_json TEXT,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS cycles (
     id BIGINT PRIMARY KEY,
     started_at TEXT NOT NULL,
@@ -190,5 +205,6 @@ ledger(id, category, ref_id, sim_ticks, oracle_ticks, wall_ms, cpu_ms, llm_calls
 llm_calls(id, role, model, prompt_tokens, completion_tokens, usd, latency_ms, cycle, experiment_id, ok, error, created_at)
 tasks(id, cycle, kind, title, description, status, priority, branch, result_json, cost_json, created_at, updated_at)
     -- kind: coding|verify|calibrate; status: pending|running|done|failed|merged|rejected
+maps(hash, tmx_id, map_uid, map_name, author, track_name, author_ms, wr_ms, gbx_hash, parsed_hash, tmx_json, report_json, created_at)
 cycles(id, started_at, finished_at, summary, cost_json, brain, model)
 "#;

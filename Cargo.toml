@@ -11,6 +11,7 @@ members = [
     "crates/rti-agent",
     "crates/rti-research",
     "crates/rti-cli",
+    "crates/rti-maps",
 ]
 
 [workspace.package]
@@ -29,6 +30,8 @@ rti-oracle = { path = "crates/rti-oracle" }
 rti-llm = { path = "crates/rti-llm" }
 rti-agent = { path = "crates/rti-agent" }
 rti-research = { path = "crates/rti-research" }
+rti-server = { path = "crates/rti-server" }
+rti-maps = { path = "crates/rti-maps" }
 
 anyhow = "1"
 thiserror = "2"
@@ -49,6 +52,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 walkdir = "2"
 similar = "2"
+tiny_http = "0.12"
 
 [profile.release]
 opt-level = 3

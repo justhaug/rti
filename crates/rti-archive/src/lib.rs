@@ -114,6 +114,64 @@ impl Archive {
         Ok(hash)
     }
 
+    /// Register an imported real-game map (idempotent on `hash`).
+    pub fn insert_map(&self, m: &MapRow) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO maps (hash, tmx_id, map_uid, map_name, author, track_name, author_ms, wr_ms, gbx_hash, parsed_hash, tmx_json, report_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (hash) DO UPDATE SET track_name = excluded.track_name, report_json = excluded.report_json, tmx_json = excluded.tmx_json",
+            params![
+                m.hash,
+                m.tmx_id,
+                m.map_uid,
+                m.map_name,
+                m.author,
+                m.track_name,
+                m.author_ms,
+                m.wr_ms,
+                m.gbx_hash,
+                m.parsed_hash,
+                m.tmx.as_ref().map(|v| v.to_string()),
+                m.report.as_ref().map(|v| v.to_string()),
+                now()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn maps(&self, n: usize) -> anyhow::Result<Vec<MapRow>> {
+        let mut st = self.conn.prepare(
+            "SELECT hash, tmx_id, map_uid, map_name, author, track_name, author_ms, wr_ms, gbx_hash, parsed_hash, tmx_json, report_json, created_at FROM maps ORDER BY created_at DESC LIMIT ?",
+        )?;
+        let rows = st
+            .query_map(params![n as i64], |r| {
+                let tmx: Option<String> = r.get(10)?;
+                let rep: Option<String> = r.get(11)?;
+                Ok(MapRow {
+                    hash: r.get(0)?,
+                    tmx_id: r.get(1)?,
+                    map_uid: r.get(2)?,
+                    map_name: r.get(3)?,
+                    author: r.get(4)?,
+                    track_name: r.get(5)?,
+                    author_ms: r.get(6)?,
+                    wr_ms: r.get(7)?,
+                    gbx_hash: r.get(8)?,
+                    parsed_hash: r.get(9)?,
+                    tmx: tmx.and_then(|t| serde_json::from_str(&t).ok()),
+                    report: rep.and_then(|t| serde_json::from_str(&t).ok()),
+                    created_at: r.get(12)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn map_by_track(&self, track_name: &str) -> anyhow::Result<Option<MapRow>> {
+        Ok(self
+            .maps(10_000)?
+            .into_iter()
+            .find(|m| m.track_name == track_name))
+    }
+
     pub fn tracks(&self) -> anyhow::Result<Vec<TrackRow>> {
         let mut st = self.conn.prepare("SELECT hash, name, length_m, n_nodes, created_at FROM tracks ORDER BY name, created_at")?;
         let rows = st
@@ -276,6 +334,7 @@ impl Archive {
             ExperimentSpec::Calibrate { tracks, .. } => (None, tracks.first().cloned()),
             ExperimentSpec::TrainBc { tracks, .. } => (Some("bc".into()), tracks.first().cloned()),
             ExperimentSpec::GenerateTrack { name, .. } => (None, Some(name.clone())),
+            ExperimentSpec::ImportMap { name, .. } => (None, name.clone()),
             ExperimentSpec::Verify { .. } | ExperimentSpec::Benchmark { .. } => (None, None),
         };
         self.conn.execute(

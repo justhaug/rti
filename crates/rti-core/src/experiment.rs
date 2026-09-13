@@ -144,6 +144,15 @@ pub enum ExperimentSpec {
         #[serde(default = "default_bench_ticks")]
         ticks: u64,
     },
+    /// Import a real TM2020 map (Trackmania Exchange id/URL or a local
+    /// .Map.Gbx path) and compile it into a simulator track.
+    ImportMap {
+        /// TMX map id, TMX URL, `tmx:<id>`, or a path to a .Map.Gbx file.
+        source: String,
+        /// Track name to register (defaults to a slug of the map name).
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// Procedurally generate and register a new track.
     GenerateTrack {
         name: String,
@@ -189,6 +198,7 @@ impl ExperimentSpec {
             ExperimentSpec::TrainBc { .. } => "train_bc",
             ExperimentSpec::Benchmark { .. } => "benchmark",
             ExperimentSpec::GenerateTrack { .. } => "generate_track",
+            ExperimentSpec::ImportMap { .. } => "import_map",
         }
     }
 
@@ -210,6 +220,7 @@ impl ExperimentSpec {
 - {"kind":"calibrate","tracks":[<name>...],"trajectories":[<hash>...],"probe_runs":<int>,"budget_ticks":<int>,"seed":<int>,"physics":<params hash|null>}
 - {"kind":"train_bc","tracks":[<name>...],"top_k":<int>,"epochs":<int>,"hidden":<int>,"seed":<int>,"value_head":<bool>}
 - {"kind":"benchmark","ticks":<int>}
-- {"kind":"generate_track","name":<str>,"seed":<int>,"segments":<int>,"half_width":<float>}"#
+- {"kind":"generate_track","name":<str>,"seed":<int>,"segments":<int>,"half_width":<float>}
+- {"kind":"import_map","source":<TMX id | TMX URL | path to .Map.Gbx>,"name":<track name|null>}  (downloads a real map from trackmania.exchange and compiles it; the compile report says how much of the map was understood)"#
     }
 }

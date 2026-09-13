@@ -112,6 +112,16 @@ enum Cmd {
     Oracle,
     /// Export a trajectory (inputs as TAS-style runs) to stdout.
     Export { trajectory: String },
+    /// Real TM2020 maps: search Trackmania Exchange, import into the simulator.
+    Map {
+        #[command(subcommand)]
+        cmd: MapCmd,
+    },
+    /// Run the HTTP server: JSON API, operator chat and UI.
+    Serve {
+        #[arg(long, default_value_t = 8787)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]
@@ -128,6 +138,32 @@ enum TrackCmd {
         #[arg(long, default_value_t = 8)]
         segments: usize,
     },
+}
+
+#[derive(Subcommand)]
+enum MapCmd {
+    /// Search Trackmania Exchange.
+    Search {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        author: Option<String>,
+        /// Comma-separated TMX tag ids (3=Tech, 25=Mini, 14=Ice, 15=Dirt, 2=FullSpeed).
+        #[arg(long)]
+        tag: Option<String>,
+        #[arg(long, default_value_t = 10)]
+        count: u32,
+    },
+    /// Download/parse/compile a map (TMX id, URL or .Map.Gbx path) and register it as a track.
+    Import {
+        source: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Parse a .Map.Gbx and print what was decoded (no archive changes).
+    Inspect { file: PathBuf },
+    /// List imported maps.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -516,6 +552,107 @@ fn main() -> anyhow::Result<()> {
                 Err(e) => println!("oracle {} unavailable: {e}", s.oracle.name()),
             }
         }
+        Cmd::Serve { port } => {
+            rti_server::serve(&root, port)?;
+        }
+        Cmd::Map { cmd } => match cmd {
+            MapCmd::Search {
+                name,
+                author,
+                tag,
+                count,
+            } => {
+                let mut params: Vec<(String, String)> =
+                    vec![("count".into(), count.min(50).to_string())];
+                if let Some(v) = name {
+                    params.push(("name".into(), v));
+                }
+                if let Some(v) = author {
+                    params.push(("author".into(), v));
+                }
+                if let Some(v) = tag {
+                    params.push(("tag".into(), v));
+                }
+                let refs: Vec<(&str, &str)> = params
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+                    .collect();
+                let r = rti_maps::TmxClient::new().search(&refs)?;
+                for m in &r.results {
+                    println!(
+                        "{:>8}  {:<40} by {:<18} author {:>7} ms  WR {:>7}  awards {:>3}  {:?}",
+                        m.map_id,
+                        truncate(&m.name, 40),
+                        truncate(&m.author_names().join(","), 18),
+                        m.length,
+                        m.wr_ms().map(|w| w.to_string()).unwrap_or("-".into()),
+                        m.award_count,
+                        m.tag_names()
+                    );
+                }
+                if r.more {
+                    println!("(more results available)");
+                }
+            }
+            MapCmd::Import { source, name } => {
+                let s = Session::open(&root)?;
+                let r = run_spec(&s, ExperimentSpec::ImportMap { source, name })?;
+                println!("{}", r.summary);
+                if let Some(w) = r.result["warnings"].as_array() {
+                    for w in w {
+                        println!("  warning: {w}");
+                    }
+                }
+            }
+            MapCmd::Inspect { file } => {
+                let m = rti_maps::parse_map(&std::fs::read(&file)?)?;
+                println!("{}", serde_json::to_string_pretty(&m.info)?);
+                println!(
+                    "blocks: {}  items: {}  body chunks: {}",
+                    m.blocks.len(),
+                    m.items.len(),
+                    m.body_chunks.len()
+                );
+                let cat = rti_maps::catalog::Catalog::load(&root)?;
+                match rti_maps::compile_track(&m, &cat, "inspect") {
+                    Ok((t, rep)) => println!(
+                        "compile: {} m, {} nodes; {}",
+                        t.length(),
+                        t.nodes.len(),
+                        serde_json::to_string_pretty(&rep)?
+                    ),
+                    Err(e) => println!("compile failed: {e}"),
+                }
+                for w in &m.warnings {
+                    println!("warning: {w}");
+                }
+            }
+            MapCmd::List => {
+                let s = Session::open(&root)?;
+                for m in s.archive.maps(100)? {
+                    let cov = m
+                        .report
+                        .as_ref()
+                        .map(|r| {
+                            format!(
+                                "{}/{} chained, finish={}",
+                                r["blocks_chained"], r["blocks_recognized"], r["finish_found"]
+                            )
+                        })
+                        .unwrap_or_default();
+                    println!(
+                        "{:<24} {:<30} by {:<16} tmx {:<7} author {:>7} ms  WR {:>7}  {}",
+                        m.track_name,
+                        truncate(&m.map_name, 30),
+                        truncate(&m.author, 16),
+                        m.tmx_id.map(|i| i.to_string()).unwrap_or("-".into()),
+                        m.author_ms.unwrap_or(0),
+                        m.wr_ms.map(|w| w.to_string()).unwrap_or("-".into()),
+                        cov
+                    );
+                }
+            }
+        },
         Cmd::Export { trajectory } => {
             let s = Session::open(&root)?;
             let t = s
@@ -541,6 +678,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        s.chars().take(n).collect()
+    }
 }
 
 fn run_spec(s: &Session, spec: ExperimentSpec) -> anyhow::Result<rti_research::ExperimentReport> {

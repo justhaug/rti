@@ -98,7 +98,153 @@ pub fn run_experiment(
             segments,
             half_width,
         } => run_generate_track(s, name, *seed, *segments, *half_width),
+        ExperimentSpec::ImportMap { source, name } => run_import_map(s, source, name.as_deref()),
     }
+}
+
+/// Slug for track names derived from map names (strips TM `$xxx` codes).
+pub fn slugify(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_us = true;
+    let mut chars = name.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            match chars.peek() {
+                Some(&n) if n.is_ascii_hexdigit() => {
+                    for _ in 0..3 {
+                        if chars.peek().map(|c| c.is_ascii_hexdigit()).unwrap_or(false) {
+                            chars.next();
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            }
+            continue;
+        }
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            last_us = false;
+        } else if !last_us {
+            out.push('_');
+            last_us = true;
+        }
+    }
+    let out = out.trim_matches('_').to_string();
+    if out.is_empty() {
+        "map".into()
+    } else {
+        out.chars().take(40).collect()
+    }
+}
+
+/// Download (or read), parse and compile a real map into a track.
+pub fn run_import_map(
+    s: &Session,
+    source: &str,
+    name: Option<&str>,
+) -> anyhow::Result<ExperimentReport> {
+    use rti_maps::catalog::Catalog;
+    let timer = CostTimer::start();
+    let path = std::path::Path::new(source);
+    let (gbx, tmx_meta): (Vec<u8>, Option<rti_maps::TmxMap>) = if path.is_file() {
+        (std::fs::read(path)?, None)
+    } else {
+        let id = rti_maps::TmxClient::parse_id(source)
+            .ok_or_else(|| anyhow::anyhow!("{source:?} is neither a file nor a TMX id/URL"))?;
+        let client = rti_maps::TmxClient::new();
+        let meta = client.map_info(id).ok();
+        (client.download(id)?, meta)
+    };
+    let parsed = rti_maps::parse_map(&gbx)?;
+    let track_name = match name {
+        Some(n) => slugify(n),
+        None => {
+            let base = slugify(&parsed.info.name);
+            match &tmx_meta {
+                Some(m) => format!("tmx{}_{}", m.map_id, base),
+                None => base,
+            }
+        }
+    };
+    let cat = Catalog::load(&s.root)?;
+    let (track, report) = rti_maps::compile_track(&parsed, &cat, &track_name)?;
+    let gbx_hash = s.archive.cas.put_bytes(&gbx)?;
+    let parsed_hash = s.archive.cas.put_json(&parsed)?;
+    rti_maps::catalog::write_track(&s.cfg.tracks_dir, &track)?;
+    let thash = s.archive.upsert_track(&track)?;
+    let row = rti_archive::rows::MapRow {
+        hash: parsed.source_hash.clone(),
+        tmx_id: tmx_meta.as_ref().map(|m| m.map_id as i64),
+        map_uid: parsed.info.uid.clone(),
+        map_name: parsed.info.name.clone(),
+        author: if parsed.info.author_nick.is_empty() {
+            parsed.info.author.clone()
+        } else {
+            parsed.info.author_nick.clone()
+        },
+        track_name: track_name.clone(),
+        author_ms: Some(parsed.info.author_ms as i64),
+        wr_ms: tmx_meta.as_ref().and_then(|m| m.wr_ms()).map(|v| v as i64),
+        gbx_hash: Some(gbx_hash.0.clone()),
+        parsed_hash: Some(parsed_hash.0.clone()),
+        tmx: tmx_meta
+            .as_ref()
+            .map(|m| serde_json::to_value(m).unwrap_or_default()),
+        report: Some(serde_json::to_value(&report)?),
+        created_at: String::new(),
+    };
+    s.archive.insert_map(&row)?;
+    let cost = timer.finish(0);
+    let coverage = if report.blocks_recognized > 0 {
+        report.blocks_chained as f64 / report.blocks_recognized as f64
+    } else {
+        0.0
+    };
+    let summary = format!(
+        "imported {:?} by {} as track {} ({:.0} m, {} nodes, {} cps): {} blocks, {} recognised, {} chained ({:.0}% of road), start={} finish={}, gaps bridged {}; author time {} ms{}; unrecognised top: {}",
+        parsed.info.name,
+        row.author,
+        track_name,
+        track.length(),
+        track.nodes.len(),
+        track.checkpoints.len(),
+        report.blocks_total,
+        report.blocks_recognized,
+        report.blocks_chained,
+        coverage * 100.0,
+        report.start_found,
+        report.finish_found,
+        report.bridged_gaps,
+        parsed.info.author_ms,
+        row.wr_ms.map(|w| format!(", TMX WR {w} ms")).unwrap_or_default(),
+        report.unrecognized.iter().take(6).map(|(n, c)| format!("{n}×{c}")).collect::<Vec<_>>().join(", ")
+    );
+    Ok(ExperimentReport {
+        result: serde_json::json!({
+            "track": track_name,
+            "track_hash": thash,
+            "map_hash": parsed.source_hash,
+            "gbx_hash": gbx_hash,
+            "tmx": row.tmx,
+            "report": report,
+            "author_ms": parsed.info.author_ms,
+            "wr_ms": row.wr_ms,
+            "length_m": track.length(),
+            "warnings": parsed.warnings,
+        }),
+        summary,
+        cost,
+        trajectories: vec![],
+        models: vec![],
+        improvement_ms: 0.0,
+        improvement_verified: false,
+        divergence_before: None,
+        divergence_after: None,
+        novelty: if report.finish_found { 0.8 } else { 0.4 },
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

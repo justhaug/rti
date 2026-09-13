@@ -79,6 +79,9 @@ pub fn validate_spec(s: &Session, spec: &mut ExperimentSpec) -> anyhow::Result<(
             *segments = (*segments).clamp(2, 40);
             *half_width = half_width.clamp(4.0, 16.0);
         }
+        ExperimentSpec::ImportMap { source, .. } => {
+            anyhow::ensure!(!source.trim().is_empty(), "import_map needs a source");
+        }
     }
     Ok(())
 }
