@@ -344,6 +344,17 @@ impl Catalog {
                 });
             }
         }
+        // "...CurveIn"/"...CurveOut" transitions and unnumbered curves are quarter turns
+        if has("Curve") && !has("Chicane") {
+            t.shape = Shape::Curve;
+            t.size = 1;
+            return Some(Resolved {
+                template: t,
+                surface,
+                family,
+                via: "grammar",
+            });
+        }
         if has("Chicane") {
             t.shape = Shape::Chicane;
             t.len = len_hint.unwrap_or(2).max(2);
@@ -583,5 +594,12 @@ mod tests {
             Shape::Straight
         );
         assert!(c.resolve("DecoHillSlope2StraightX2").is_some());
+        assert_eq!(
+            c.resolve("RoadTechTiltTransition2UpLeftCurveIn")
+                .unwrap()
+                .template
+                .shape,
+            Shape::Curve
+        );
     }
 }

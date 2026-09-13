@@ -99,6 +99,11 @@ pub fn run_experiment(
             half_width,
         } => run_generate_track(s, name, *seed, *segments, *half_width),
         ExperimentSpec::ImportMap { source, name } => run_import_map(s, source, name.as_deref()),
+        ExperimentSpec::CalibrateReplays {
+            tracks,
+            generations,
+            seed,
+        } => run_calibrate_replays(s, tracks, *generations, *seed, experiment_id),
         ExperimentSpec::ImportReplay { source, name } => {
             run_import_replay(s, source, name.as_deref())
         }
@@ -1128,5 +1133,157 @@ fn run_generate_track(
         summary,
         novelty: 0.6,
         ..Default::default()
+    })
+}
+
+/// Fit physics to the archive's human replays (world `human:*`).
+pub fn run_calibrate_replays(
+    s: &Session,
+    tracks: &[String],
+    generations: usize,
+    seed: u64,
+    experiment_id: &str,
+) -> anyhow::Result<ExperimentReport> {
+    let timer = CostTimer::start();
+    let names = if tracks.is_empty() {
+        s.track_names()?
+    } else {
+        tracks.to_vec()
+    };
+    // cases: (geom, actions, real time, checkpoint count)
+    let mut cases: Vec<(TrackGeom, Vec<Action>, u32)> = vec![];
+    for name in &names {
+        let track = s.track(name)?;
+        for row in s.archive.best_trajectories(name, "human", 5)? {
+            if let Some(t) = s.archive.trajectory(&ContentHash(row.hash.clone()))? {
+                let avg = track.length() / (t.result.time_ms.max(1) as f32 / 1000.0);
+                if (8.0..=110.0).contains(&avg) && track.finish.is_some() {
+                    let mut acts = t.actions.clone();
+                    let hold = acts.last().copied().unwrap_or(Action::full_gas());
+                    acts.extend(std::iter::repeat_n(hold, 300));
+                    cases.push((TrackGeom::new(track.clone()), acts, t.result.time_ms));
+                }
+            }
+        }
+    }
+    anyhow::ensure!(!cases.is_empty(), "no usable human replays (need imported replays on tracks that compiled start-to-finish with a plausible average speed)");
+    let (start_hash, start_params) = s.archive.current_physics()?;
+    let loss = |p: &PhysicsParams| -> (f64, u64, usize) {
+        let per: Vec<(f64, u64, bool)> = cases
+            .par_iter()
+            .map(|(geom, acts, real)| {
+                let sim = Sim::new(p.clone(), geom.clone());
+                let ro = rollout(&sim, &sim.initial_state(), acts, acts.len() as u32, false);
+                if ro.result.finished {
+                    (
+                        (ro.result.time_ms as f64 - *real as f64).abs(),
+                        ro.ticks,
+                        true,
+                    )
+                } else {
+                    (
+                        20_000.0 + (geom.total_len - ro.result.progress).max(0.0) as f64 * 20.0,
+                        ro.ticks,
+                        false,
+                    )
+                }
+            })
+            .collect();
+        (
+            per.iter().map(|x| x.0).sum::<f64>() / per.len() as f64,
+            per.iter().map(|x| x.1).sum(),
+            per.iter().filter(|x| x.2).count(),
+        )
+    };
+    let (before, t0, fin0) = loss(&start_params);
+    let mut sim_ticks = t0;
+    let base = start_params.to_vec();
+    let dim = base.len();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ 0xB0A7);
+    let mut mean = vec![0.0f32; dim];
+    let mut std = vec![0.3f32; dim];
+    let mut best = (before, start_params.clone(), fin0);
+    let pop = 32;
+    let n_elite = 6;
+    for _gen in 0..generations {
+        let cands: Vec<Vec<f32>> = (0..pop)
+            .map(|_| {
+                (0..dim)
+                    .map(|d| {
+                        let z: f32 =
+                            rand_distr::Distribution::sample(&rand_distr::StandardNormal, &mut rng);
+                        mean[d] + std[d] * z
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut scored: Vec<(f64, usize)> = vec![];
+        for (i, c) in cands.iter().enumerate() {
+            let v: Vec<f32> = base
+                .iter()
+                .zip(c)
+                .map(|(b, m)| b * m.clamp(-2.5, 2.5).exp())
+                .collect();
+            let p = PhysicsParams::from_vec(&v)?;
+            let (l, t, fin) = loss(&p);
+            sim_ticks += t;
+            scored.push((l, i));
+            if l < best.0 {
+                best = (l, p, fin);
+            }
+        }
+        scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        for d in 0..dim {
+            let m: f32 = scored[..n_elite]
+                .iter()
+                .map(|(_, i)| cands[*i][d])
+                .sum::<f32>()
+                / n_elite as f32;
+            let v: f32 = scored[..n_elite]
+                .iter()
+                .map(|(_, i)| (cands[*i][d] - m).powi(2))
+                .sum::<f32>()
+                / n_elite as f32;
+            mean[d] = 0.7 * m + 0.3 * mean[d];
+            std[d] = (0.7 * v.sqrt() + 0.3 * std[d]).max(0.01);
+        }
+    }
+    let improved = best.0 < before * 0.98;
+    let new_hash = if improved {
+        let h = s.archive.insert_physics(
+            &best.1,
+            &format!("replay-fit {} cases err={:.0} ms", cases.len(), best.0),
+            Some(experiment_id),
+            None,
+        )?;
+        s.archive.set_current_physics(&h)?;
+        Some(h)
+    } else {
+        None
+    };
+    let cost = timer.finish(sim_ticks);
+    let summary = format!(
+        "replay calibration on {} human runs over {:?}: mean loss {:.0} → {:.0} ms-equivalent, sim finishes {}/{} → {}/{}{}",
+        cases.len(),
+        names,
+        before,
+        best.0,
+        fin0,
+        cases.len(),
+        best.2,
+        cases.len(),
+        if improved { " (adopted as current physics)" } else { " (no significant improvement)" }
+    );
+    Ok(ExperimentReport {
+        result: serde_json::json!({"before": before, "after": best.0, "cases": cases.len(), "finished_before": fin0, "finished_after": best.2, "improved": improved, "physics_before": start_hash, "physics_after": new_hash, "generations": generations}),
+        summary,
+        cost,
+        trajectories: vec![],
+        models: vec![],
+        improvement_ms: 0.0,
+        improvement_verified: false,
+        divergence_before: Some(before as f32),
+        divergence_after: Some(best.0 as f32),
+        novelty: 0.0,
     })
 }

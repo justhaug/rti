@@ -123,6 +123,17 @@ pub enum ExperimentSpec {
         #[serde(default)]
         physics: Option<ContentHash>,
     },
+    /// Fit physics parameters to human replays in the archive (trajectories
+    /// in world `human:*`): CEM minimising finish-time and checkpoint-split
+    /// errors of the human inputs replayed in the simulator. Needs no oracle.
+    CalibrateReplays {
+        #[serde(default)]
+        tracks: Vec<String>,
+        #[serde(default = "default_gens")]
+        generations: usize,
+        #[serde(default)]
+        seed: u64,
+    },
     /// Behaviour-clone a policy net from the best archived trajectories.
     TrainBc {
         #[serde(default)]
@@ -176,6 +187,9 @@ pub enum ExperimentSpec {
 fn default_probe_runs() -> usize {
     16
 }
+fn default_gens() -> usize {
+    30
+}
 fn default_top_k() -> usize {
     20
 }
@@ -204,6 +218,7 @@ impl ExperimentSpec {
             ExperimentSpec::Search { .. } => "search",
             ExperimentSpec::Verify { .. } => "verify",
             ExperimentSpec::Calibrate { .. } => "calibrate",
+            ExperimentSpec::CalibrateReplays { .. } => "calibrate_replays",
             ExperimentSpec::TrainBc { .. } => "train_bc",
             ExperimentSpec::Benchmark { .. } => "benchmark",
             ExperimentSpec::GenerateTrack { .. } => "generate_track",
@@ -228,6 +243,7 @@ impl ExperimentSpec {
 - {"kind":"search","track":<name>,"method":"random_shooting|cem|cma_es|beam|local_opt|map_elites|policy","budget_ticks":<int>,"seed":<int>,"params":{population?,elite_frac?,control_points?,sigma?,beam_width?,macro_ticks?,steer_levels?,iters?,model?,noise?,grid?,max_ticks?},"warm_start":<trajectory hash|null>,"physics":<params hash|null>}
 - {"kind":"verify","trajectory":<trajectory hash>}
 - {"kind":"calibrate","tracks":[<name>...],"trajectories":[<hash>...],"probe_runs":<int>,"budget_ticks":<int>,"seed":<int>,"physics":<params hash|null>}
+- {"kind":"calibrate_replays","tracks":[<name>...],"generations":<int>,"seed":<int>}  (fit physics to imported human replays: no oracle needed; the loss is the finish/split time error of human inputs replayed in the sim)
 - {"kind":"train_bc","tracks":[<name>...],"top_k":<int>,"epochs":<int>,"hidden":<int>,"seed":<int>,"value_head":<bool>}
 - {"kind":"benchmark","ticks":<int>}
 - {"kind":"generate_track","name":<str>,"seed":<int>,"segments":<int>,"half_width":<float>}

@@ -52,27 +52,30 @@ pub struct PhysicsParams {
 }
 
 impl Default for PhysicsParams {
+    /// Defaults fitted to human replays (finish and checkpoint times of TMX
+    /// replays replayed in this simulator on compiled maps); see
+    /// `crates/rti-maps/examples/replayfit.rs`. Still a first approximation.
     fn default() -> Self {
         PhysicsParams {
-            engine_accel: 14.0,
-            engine_falloff_speed: 45.0,
-            brake_decel: 28.0,
-            drag: 0.0028,
-            rolling: 0.6,
-            grip: 22.0,
-            surface_grip: [1.0, 0.72, 0.45, 0.12],
-            surface_drive: [1.0, 0.85, 0.6, 0.55],
-            steer_max: 0.55,
-            steer_speed_falloff: 25.0,
-            steer_rate: 6.0,
-            wheelbase: 2.6,
-            slide_damping: 0.9,
-            slip_onset: 30.0,
-            offtrack_grip: 0.35,
-            offtrack_drag: 6.0,
-            wall_restitution: 0.55,
-            max_speed: 120.0,
-            drive_tau: 0.35,
+            engine_accel: 19.8,
+            engine_falloff_speed: 55.5,
+            brake_decel: 44.5,
+            drag: 0.0009,
+            rolling: 1.1,
+            grip: 23.8,
+            surface_grip: [1.67, 1.07, 0.43, 0.093],
+            surface_drive: [2.54, 1.07, 0.81, 0.62],
+            steer_max: 0.49,
+            steer_speed_falloff: 17.7,
+            steer_rate: 10.4,
+            wheelbase: 2.41,
+            slide_damping: 0.98,
+            slip_onset: 32.4,
+            offtrack_grip: 0.77,
+            offtrack_drag: 7.2,
+            wall_restitution: 0.8,
+            max_speed: 107.0,
+            drive_tau: 0.31,
             downforce: 0.0,
         }
     }

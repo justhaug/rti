@@ -312,6 +312,7 @@ fn dijkstra(
     seeds: &[(usize, usize)],
     target: &dyn Fn(usize) -> bool,
     blocked: &std::collections::HashSet<usize>,
+    require_back_entry: bool,
 ) -> Stage {
     let idx = |piece: usize, entry: usize| piece * 16 + entry;
     let mut dist: HashMap<usize, f32> = HashMap::new();
@@ -340,7 +341,7 @@ fn dijkstra(
         }
         if !seed_set.contains(&piece)
             && target(piece)
-            && (pieces[piece].ports.len() != 2 || entry == 0)
+            && (!require_back_entry || pieces[piece].ports.len() != 2 || entry == 0)
         {
             goal = Some((piece, entry));
             break;
@@ -475,7 +476,14 @@ fn chain_from(
                 is_finish(i)
             }
         };
-        let st = dijkstra(pieces, by_point, &cur_seeds, &target, &blocked);
+        let st = dijkstra(
+            pieces,
+            by_point,
+            &cur_seeds,
+            &target,
+            &blocked,
+            !targets_left,
+        );
         // append (skip the seed piece if it is already the tail of seq)
         let skip = if seq.is_empty() { 0 } else { 1 };
         for &(p, a, b) in st.seq.iter().skip(skip) {
@@ -495,7 +503,14 @@ fn chain_from(
                 remaining.clear();
                 let (p, a, _b) = *seq.last().unwrap();
                 cur_seeds = vec![(p, a)];
-                let st2 = dijkstra(pieces, by_point, &cur_seeds, &|i| is_finish(i), &blocked);
+                let st2 = dijkstra(
+                    pieces,
+                    by_point,
+                    &cur_seeds,
+                    &|i| is_finish(i),
+                    &blocked,
+                    true,
+                );
                 for &(pp, aa, bb) in st2.seq.iter().skip(1) {
                     seq.push((pp, aa, bb));
                 }

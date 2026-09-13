@@ -83,8 +83,8 @@ fn compiles_synthetic_chain() {
         mk("RoadTechStraight", 0, 10, 13),
         mk("RoadTechCurve1", 2, 10, 14), // bottom (from z=14) → right edge (x=11)
         mk("RoadTechStraight", 1, 11, 14), // along x
-        mk("RoadTechCheckpoint", 1, 12, 14),
-        mk("RoadTechFinish", 1, 13, 14),
+        mk("RoadTechCheckpoint", 3, 12, 14),
+        mk("RoadTechFinish", 3, 13, 14), // faces +x: entered through its back (left) edge
         mk("RoadTechStraight", 0, 30, 30), // stray piece, not part of the chain
     ];
     let map = ParsedMap {
