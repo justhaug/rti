@@ -12,6 +12,7 @@ struct Case {
     id: String,
     track: Track,
     world: std::sync::Arc<rti_sim::World>,
+    markers: Vec<(u32, u8)>,
     actions: Vec<Action>,
     real_ms: u32,
     cps_ms: Vec<u32>,
@@ -36,17 +37,19 @@ fn load(dir: &str) -> anyhow::Result<Vec<Case>> {
         if g.inputs.is_empty() || g.race_time_ms == 0 {
             continue;
         }
-        let Ok((track, rep, world)) = rti_maps::compile::compile_track3(m, &cat, "x") else {
+        let Ok((track, rep, world, markers)) = rti_maps::compile::compile_track3_full(m, &cat, "x")
+        else {
             continue;
         };
         let full = rep.finish_found && rep.start_found;
         let avg_speed = track.length() / (g.race_time_ms as f32 / 1000.0);
-        // only geometry we trust: start-to-finish chains with a plausible average speed
-        if !full || !(8.0..=110.0).contains(&avg_speed) {
+        // plausible average speed for the real time (5-70 m/s ≈ 18-250 km/h)
+        if !(5.0..=70.0).contains(&avg_speed) {
             continue;
         }
         out.push(Case {
             world: std::sync::Arc::new(world),
+            markers,
             id: rf
                 .file_name()
                 .unwrap()
@@ -67,6 +70,7 @@ fn load(dir: &str) -> anyhow::Result<Vec<Case>> {
 fn case_loss(c: &Case, params: &PhysicsParams) -> (f64, bool, u32, f32) {
     let mut geom = TrackGeom::new(c.track.clone());
     geom.world = Some(c.world.clone());
+    geom.markers = c.markers.clone();
     let sim = Sim::new(params.clone(), geom);
     let ro = rollout(
         &sim,
@@ -105,15 +109,27 @@ fn total_loss(cases: &[Case], params: &PhysicsParams) -> f64 {
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let cases = load(&args[1])?;
+    let all = load(&args[1])?;
     let out = &args[2];
     let gens: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(40);
+    let base = PhysicsParams::default();
+    // Fit on the runs whose geometry already carries the car to the finish:
+    // there a time difference means physics, not holes in the surface.
+    let keep_all = args.iter().any(|a| a == "--all-cases");
+    let cases: Vec<Case> = if keep_all {
+        all
+    } else {
+        all.into_iter().filter(|c| case_loss(c, &base).1).collect()
+    };
+    anyhow::ensure!(
+        !cases.is_empty(),
+        "no case finishes with the baseline physics"
+    );
     eprintln!(
-        "{} cases ({} compiled start-to-finish)",
+        "{} fitting cases ({} compiled start-to-finish)",
         cases.len(),
         cases.iter().filter(|c| c.full).count()
     );
-    let base = PhysicsParams::default();
     let names = PhysicsParams::names();
     let b = base.to_vec();
     let dim = b.len();
@@ -201,6 +217,30 @@ fn main() -> anyhow::Result<()> {
             (c / a - 1.0) * 100.0
         );
     }
+    let fin = cases.iter().filter(|c| case_loss(c, &best.1).1).count();
+    let within10 = cases
+        .iter()
+        .filter(|c| {
+            let (_, f, t, _) = case_loss(c, &best.1);
+            f && ((t as f64 - c.real_ms as f64).abs() < c.real_ms as f64 * 0.1)
+        })
+        .count();
+    println!(
+        "finished {fin}/{} cases, within 10% of the real time: {within10}",
+        cases.len()
+    );
+    let fin = cases.iter().filter(|c| case_loss(c, &best.1).1).count();
+    let within10 = cases
+        .iter()
+        .filter(|c| {
+            let (_, f, t, _) = case_loss(c, &best.1);
+            f && ((t as f64 - c.real_ms as f64).abs() < c.real_ms as f64 * 0.1)
+        })
+        .count();
+    println!(
+        "finished {fin}/{} cases, within 10% of the real time: {within10}",
+        cases.len()
+    );
     println!("\nper case with fitted params:");
     for c in &cases {
         let (l, fin, t, prog) = case_loss(c, &best.1);

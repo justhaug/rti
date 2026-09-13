@@ -99,6 +99,7 @@ pub fn run_experiment(
             half_width,
         } => run_generate_track(s, name, *seed, *segments, *half_width),
         ExperimentSpec::ImportMap { source, name } => run_import_map(s, source, name.as_deref()),
+        ExperimentSpec::ReplayBench { tracks } => run_replay_bench(s, tracks),
         ExperimentSpec::CalibrateReplays {
             tracks,
             generations,
@@ -153,7 +154,9 @@ pub fn run_import_replay(
                 None => slugify(&map.info.name),
             };
             let cat = Catalog::load(&s.root)?;
-            let (track, report) = rti_maps::compile_track(map, &cat, &track_name)?;
+            let (mut track, report, world, _markers) =
+                rti_maps::compile::compile_track3_full(map, &cat, &track_name)?;
+            track.world_hash = Some(s.archive.cas.put_bytes(&world.to_bytes())?.0);
             rti_maps::catalog::write_track(&s.cfg.tracks_dir, &track)?;
             s.archive.upsert_track(&track)?;
             let gbx_hash = s.archive.cas.put_bytes(&replay.map_bytes)?;
@@ -381,7 +384,9 @@ pub fn run_import_map(
         }
     };
     let cat = Catalog::load(&s.root)?;
-    let (track, report) = rti_maps::compile_track(&parsed, &cat, &track_name)?;
+    let (mut track, report, world, _markers) =
+        rti_maps::compile::compile_track3_full(&parsed, &cat, &track_name)?;
+    track.world_hash = Some(s.archive.cas.put_bytes(&world.to_bytes())?.0);
     let gbx_hash = s.archive.cas.put_bytes(&gbx)?;
     let parsed_hash = s.archive.cas.put_json(&parsed)?;
     // make the map loadable by the game bridge
@@ -1284,6 +1289,91 @@ pub fn run_calibrate_replays(
         improvement_verified: false,
         divergence_before: Some(before as f32),
         divergence_after: Some(best.0 as f32),
+        novelty: 0.0,
+    })
+}
+
+/// The simulator accuracy benchmark over archived human runs.
+pub fn run_replay_bench(s: &Session, tracks: &[String]) -> anyhow::Result<ExperimentReport> {
+    let timer = CostTimer::start();
+    let names = if tracks.is_empty() {
+        s.track_names()?
+    } else {
+        tracks.to_vec()
+    };
+    let mut rows = vec![];
+    let mut ticks = 0u64;
+    for name in &names {
+        let track = s.track(name)?;
+        let (sim, _) = s.sim(&track, None)?;
+        for row in s.archive.best_trajectories(name, "human", 3)? {
+            let Some(t) = s.archive.trajectory(&ContentHash(row.hash.clone()))? else {
+                continue;
+            };
+            let mut acts = t.actions.clone();
+            let hold = acts.last().copied().unwrap_or(Action::full_gas());
+            acts.extend(std::iter::repeat_n(hold, 300));
+            let ro = rollout(&sim, &sim.initial_state(), &acts, acts.len() as u32, false);
+            ticks += ro.ticks;
+            let err = if ro.result.finished {
+                Some(ro.result.time_ms as i64 - t.result.time_ms as i64)
+            } else {
+                None
+            };
+            rows.push(serde_json::json!({
+                "track": name, "trajectory": row.hash, "real_ms": t.result.time_ms, "sim_ms": ro.result.time_ms,
+                "finished": ro.result.finished, "error_ms": err, "progress_frac": ro.result.progress / sim.geom.total_len.max(1.0),
+                "walls": ro.result.wall_hits, "world": track.world_hash.is_some(),
+            }));
+        }
+    }
+    let n = rows.len();
+    let finished = rows
+        .iter()
+        .filter(|r| r["finished"].as_bool().unwrap_or(false))
+        .count();
+    let within10 = rows
+        .iter()
+        .filter(|r| {
+            r["error_ms"]
+                .as_i64()
+                .map(|e| (e.abs() as f64) < r["real_ms"].as_f64().unwrap_or(1.0) * 0.1)
+                .unwrap_or(false)
+        })
+        .count();
+    let mut errs: Vec<i64> = rows
+        .iter()
+        .filter_map(|r| r["error_ms"].as_i64().map(|e| e.abs()))
+        .collect();
+    errs.sort();
+    let median = errs.get(errs.len() / 2).copied();
+    let mut worst: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|r| !r["finished"].as_bool().unwrap_or(false))
+        .collect();
+    worst.sort_by(|a, b| {
+        a["progress_frac"]
+            .as_f64()
+            .partial_cmp(&b["progress_frac"].as_f64())
+            .unwrap()
+    });
+    let cost = timer.finish(ticks);
+    let summary = format!(
+        "replay bench: {n} human runs on {} tracks; sim finished {finished}, within 10% of the real time {within10}, median |error| {:?} ms; earliest failures: {}",
+        names.len(),
+        median,
+        worst.iter().take(5).map(|r| format!("{} at {:.0}%", r["track"].as_str().unwrap_or(""), r["progress_frac"].as_f64().unwrap_or(0.0) * 100.0)).collect::<Vec<_>>().join(", ")
+    );
+    Ok(ExperimentReport {
+        result: serde_json::json!({"runs": n, "finished": finished, "within_10pct": within10, "median_abs_error_ms": median, "rows": rows}),
+        summary,
+        cost,
+        trajectories: vec![],
+        models: vec![],
+        improvement_ms: 0.0,
+        improvement_verified: false,
+        divergence_before: None,
+        divergence_after: median.map(|m| m as f32),
         novelty: 0.0,
     })
 }

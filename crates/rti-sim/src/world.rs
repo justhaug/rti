@@ -126,6 +126,47 @@ impl World {
         best
     }
 
+    /// Highest layer at or below `y + up_tol`: the surface a car at height
+    /// `y` would rest on or fall onto. `None` when there is nothing under it.
+    #[inline]
+    pub fn layer_below(&self, x: f32, z: f32, y: f32, up_tol: f32) -> Option<Layer> {
+        let gx = ((x / RES).floor() as i32) - self.x0;
+        let gz = ((z / RES).floor() as i32) - self.z0;
+        let mut best: Option<Layer> = None;
+        for l in self.cell_layers(gx, gz) {
+            if l.y <= y + up_tol && best.map(|b| l.y > b.y).unwrap_or(true) {
+                best = Some(*l);
+            }
+        }
+        best
+    }
+
+    /// `layer_below` with a finite-difference normal.
+    pub fn sample_below(&self, x: f32, z: f32, y: f32, up_tol: f32) -> Option<Sample> {
+        let l = self.layer_below(x, z, y, up_tol)?;
+        Some(self.sample_of(x, z, l))
+    }
+
+    fn sample_of(&self, x: f32, z: f32, l: Layer) -> Sample {
+        let h = |dx: f32, dz: f32| {
+            self.layer_at(x + dx, z + dz, l.y, 3.0)
+                .map(|q| q.y)
+                .unwrap_or(l.y)
+        };
+        let d = RES;
+        let dydx = (h(d, 0.0) - h(-d, 0.0)) / (2.0 * d);
+        let dydz = (h(0.0, d) - h(0.0, -d)) / (2.0 * d);
+        let n = [-dydx, 1.0, -dydz];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        Sample {
+            y: l.y,
+            normal: [n[0] / len, n[1] / len, n[2] / len],
+            surface: surface_from(l.surface),
+            open: l.kind == 1,
+            piece: l.piece,
+        }
+    }
+
     /// Surface sample with a finite-difference normal. Returns None when
     /// nothing drivable is within `tol` of `y`.
     pub fn sample(&self, x: f32, z: f32, y: f32, tol: f32) -> Option<Sample> {
@@ -191,5 +232,69 @@ pub fn rasterize(
         w,
         h,
         cells,
+    }
+}
+
+impl World {
+    /// Compact binary encoding (little endian): header + layers.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + self.offsets.len() * 4 + self.layers.len() * 10);
+        out.extend_from_slice(b"RTIW");
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&self.x0.to_le_bytes());
+        out.extend_from_slice(&self.z0.to_le_bytes());
+        out.extend_from_slice(&(self.w as u32).to_le_bytes());
+        out.extend_from_slice(&(self.h as u32).to_le_bytes());
+        out.extend_from_slice(&(self.offsets.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(self.layers.len() as u32).to_le_bytes());
+        for o in &self.offsets {
+            out.extend_from_slice(&o.to_le_bytes());
+        }
+        for l in &self.layers {
+            out.extend_from_slice(&l.y.to_le_bytes());
+            out.push(l.surface);
+            out.push(l.kind);
+            out.extend_from_slice(&l.piece.to_le_bytes());
+        }
+        out
+    }
+
+    pub fn from_bytes(b: &[u8]) -> anyhow::Result<World> {
+        anyhow::ensure!(b.len() >= 32 && &b[..4] == b"RTIW", "not an RTI world blob");
+        let u = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        let x0 = u(8) as i32;
+        let z0 = u(12) as i32;
+        let w = u(16) as usize;
+        let h = u(20) as usize;
+        let no = u(24) as usize;
+        let nl = u(28) as usize;
+        let mut p = 32;
+        let mut offsets = Vec::with_capacity(no);
+        for _ in 0..no {
+            offsets.push(u(p));
+            p += 4;
+        }
+        let mut layers = Vec::with_capacity(nl);
+        for _ in 0..nl {
+            let y = f32::from_le_bytes(b[p..p + 4].try_into().unwrap());
+            let surface = b[p + 4];
+            let kind = b[p + 5];
+            let piece = u(p + 6);
+            layers.push(Layer {
+                y,
+                surface,
+                kind,
+                piece,
+            });
+            p += 10;
+        }
+        Ok(World {
+            x0,
+            z0,
+            w,
+            h,
+            offsets,
+            layers,
+        })
     }
 }

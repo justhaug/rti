@@ -86,6 +86,19 @@ cargo run --release -p rti-search --example compare -- hairpin 20000000
 * `[research]` — `brain = "llm" | "scripted"`, critic on/off, verification threshold.
 * `[value]` — weights of the value function.
 
+## Simulator accuracy
+
+The simulator drives a 3D layered heightfield compiled from real maps, with block heights mined
+from a 144-map corpus. Its standing benchmark is human TMX replays: their exact inputs are
+replayed in the simulator on the compiled map and compared with the real finish and split times
+(`rti experiment '{"kind":"replay_bench"}'`, or `cargo run --release -p rti-maps --example
+replaybench -- <maps> <replays>`).
+
+Current state on 126 replays: 60 routes compile to a plausible length, the simulator carries 8 of
+them to the finish, 3 within 25 % of the real time, median error 5.2 s. Block-shape coverage, not
+the physics constants, is what limits this; `docs/maps.md` has the diagnosis and the three ways
+forward.
+
 ## Status
 
 Bootstrapped harness. Simulator, search, nets, archive, oracle contract, LLM roles, coding

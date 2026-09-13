@@ -93,3 +93,56 @@ cargo run -p rti-maps --example dump  -- some.Map.Gbx     # header, chunks, bloc
   embedded custom items — needed for a 3D simulator; the current simulator is planar.
 * Nadeo record ghosts (TMX replays and local autosaves are already ingested, see `docs/oracle.md`).
 * Bulk ingestion (`search TMX → download N maps → compile → classify`) as a scheduled task.
+
+
+## The 3D world and the accuracy benchmark
+
+`compile_track3_full` returns, besides the track polyline, a **layered heightfield**
+(`rti_sim::World`): every recognised block is rasterised at 1 m into (height, surface, drivable,
+road-or-open) samples, several layers per cell for overpasses. Block heights come from
+`shape3d.rs` (slope, slope start/end, tilt banking profiles) with the per-port height offsets
+**mined from the corpus** (`crates/rti-maps/data/heights.toml`, `example heightmine`): for every
+pair of adjacent pieces in 144 maps we record the neighbour's base height relative to ours, and
+take the median per block name and port. That is how we know a `RoadTechSlopeStraight` spans
+−8 to +8 m around its block height and a `Platform*` block is a solid whose drivable top is 8 m up.
+
+On top of the block geometry, the chained route is rasterised as a **corridor** so that blocks we
+do not model (loops, wall rides, diagonals) leave no hole in the surface. Real piece geometry
+overlays it.
+
+The car then drives on that surface: gravity along the slope, banking through the surface normal,
+take-off and landing, falling off open surfaces, walls on road pieces whose outward normal is
+derived from the drivable mask. Race triggers are the marker pieces of the chained route, not
+centerline distances.
+
+### Measured accuracy (`example replaybench`, 126 TMX replays)
+
+| metric | value |
+|---|---|
+| routes whose compiled length is plausible for the real time | 60 of 126 |
+| of those, runs the sim carries to the finish | 8 |
+| within 25 % of the real time | 3 |
+| median absolute time error of finished runs | 5.2 s |
+
+The binding constraint is geometry, not the physics constants. Almost every failure is the car
+leaving the drivable surface in the first 10–15 % of the route, usually with zero wall contacts:
+it is on an open platform surface or a piece whose modelled shape differs from the real one, and
+once the line diverges from the human's, an open-loop replay of their inputs cannot recover.
+Widening the corridor does not help (tested at +8 m and +20 m), which rules out "the road is too
+narrow" and points at missing or wrong block shapes.
+
+With only 8 usable fitting cases the physics constants are not identifiable: a 150-generation CEM
+fit drives top speed down to 116 km/h to match a handful of short maps, and makes the corpus worse.
+`replayfit` therefore exists but its output is not adopted automatically; `rti experiment
+'{"kind":"replay_bench"}'` is the standing accuracy measurement inside the research loop.
+
+### What would move the number
+
+1. **Block shape coverage.** Loops, wall rides, diagonal roads, the `*Special*` gameplay blocks and
+   the many transition variants are approximated as straights or not modelled at all. Each family
+   added to `shape3d.rs` removes a class of early failures.
+2. **Closed-loop evaluation.** Human replays carry inputs but no positions, so error compounds.
+   Comparing checkpoint split times with the car constrained to the road (a rail mode) would make
+   the speed profile identifiable without needing the exact line.
+3. **Real-game verification.** The oracle bridge (`docs/oracle.md`) replays inputs in TM2020 and
+   returns per-tick positions; that turns this from an inference problem into a measurement.

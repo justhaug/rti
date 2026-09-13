@@ -50,13 +50,22 @@ fn main() -> anyhow::Result<()> {
                     if q.2 * p.2 + q.3 * p.3 > -0.5 {
                         continue;
                     }
-                    if !(nname.ends_with("Straight")
+                    if let Ok(pref) = std::env::var("RTI_MINE_NEIGHBOR_PREFIX") {
+                        if !nname.starts_with(&pref) {
+                            continue;
+                        }
+                    } else if !(nname.ends_with("Straight")
                         || nname.ends_with("Base")
                         || nname.ends_with("Checkpoint")
                         || nname.ends_with("Start")
                         || nname.ends_with("Finish"))
                     {
                         continue;
+                    }
+                    if let Ok(own) = std::env::var("RTI_MINE_OWN_PREFIX") {
+                        if !name.starts_with(&own) {
+                            continue;
+                        }
                     }
                     let d = nbase - base;
                     if d.abs() <= 40.0 {

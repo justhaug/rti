@@ -38,6 +38,10 @@ pub struct CarState {
     pub vh: f32,
     /// Ticks spent airborne in the current flight (0 when grounded).
     pub air_ticks: u32,
+    /// Bitmask of checkpoint pieces already touched (3D worlds; up to 64).
+    pub cp_mask: u64,
+    /// Height of the last surface the car was grounded on (3D worlds).
+    pub ground_h: f32,
 }
 
 impl CarState {

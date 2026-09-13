@@ -134,6 +134,13 @@ pub enum ExperimentSpec {
         #[serde(default)]
         seed: u64,
     },
+    /// Replay every archived human run (world `human:*`) in the simulator on
+    /// its track and report how many finish and how close the times are.
+    /// The standing accuracy benchmark of the simulator.
+    ReplayBench {
+        #[serde(default)]
+        tracks: Vec<String>,
+    },
     /// Behaviour-clone a policy net from the best archived trajectories.
     TrainBc {
         #[serde(default)]
@@ -219,6 +226,7 @@ impl ExperimentSpec {
             ExperimentSpec::Verify { .. } => "verify",
             ExperimentSpec::Calibrate { .. } => "calibrate",
             ExperimentSpec::CalibrateReplays { .. } => "calibrate_replays",
+            ExperimentSpec::ReplayBench { .. } => "replay_bench",
             ExperimentSpec::TrainBc { .. } => "train_bc",
             ExperimentSpec::Benchmark { .. } => "benchmark",
             ExperimentSpec::GenerateTrack { .. } => "generate_track",
@@ -244,6 +252,7 @@ impl ExperimentSpec {
 - {"kind":"verify","trajectory":<trajectory hash>}
 - {"kind":"calibrate","tracks":[<name>...],"trajectories":[<hash>...],"probe_runs":<int>,"budget_ticks":<int>,"seed":<int>,"physics":<params hash|null>}
 - {"kind":"calibrate_replays","tracks":[<name>...],"generations":<int>,"seed":<int>}  (fit physics to imported human replays: no oracle needed; the loss is the finish/split time error of human inputs replayed in the sim)
+- {"kind":"replay_bench","tracks":[<name>...]}  (the sim accuracy benchmark: replay all archived human runs; reports finished/within-10% counts, per-track errors and where runs fall off)
 - {"kind":"train_bc","tracks":[<name>...],"top_k":<int>,"epochs":<int>,"hidden":<int>,"seed":<int>,"value_head":<bool>}
 - {"kind":"benchmark","ticks":<int>}
 - {"kind":"generate_track","name":<str>,"seed":<int>,"segments":<int>,"half_width":<float>}

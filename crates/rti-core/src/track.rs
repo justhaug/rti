@@ -63,6 +63,13 @@ pub struct Track {
     /// Optional TM2020 map identifier (UID) for oracle verification.
     #[serde(default)]
     pub tm_map_uid: Option<String>,
+    /// Content hash of the serialised 3D world (`rti_sim::World`) in the CAS,
+    /// when the track was compiled from a real map.
+    #[serde(default)]
+    pub world_hash: Option<String>,
+    /// Marker pieces in that world: (piece id, kind) with 1 = checkpoint, 2 = finish.
+    #[serde(default)]
+    pub markers: Vec<(u32, u8)>,
     /// Map file path relative to the game's Maps folder, for the bridge's
     /// `load_map` (e.g. "RTI/tmx356566.Map.Gbx").
     #[serde(default)]
@@ -207,6 +214,8 @@ impl Track {
             finish: None,
             max_ticks: default_max_ticks(),
             tm_map_uid: None,
+            world_hash: None,
+            markers: Vec::new(),
             tm_map_file: None,
             tm_frame: None,
             walls: true,

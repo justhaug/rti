@@ -60,15 +60,19 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         };
-        let (track, report, world) = match rti_maps::compile::compile_track3(&map, &cat, &id) {
-            Ok(x) => x,
-            Err(_) => continue,
-        };
+        let (track, report, world, markers) =
+            match rti_maps::compile::compile_track3_full(&map, &cat, &id) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+        let markers_dbg = markers.clone();
         let flat = args.iter().any(|a| a == "--flat");
         let geom = if flat {
             TrackGeom::new(track.clone())
         } else {
-            TrackGeom::new(track.clone()).with_world(world)
+            TrackGeom::new(track.clone())
+                .with_world(world)
+                .with_markers(markers)
         };
         let sim = Sim::new(params.clone(), geom);
         let acts = inputs_to_actions(&ghost.inputs, ghost.ticks + 500);
@@ -79,7 +83,22 @@ fn main() -> anyhow::Result<()> {
                 println!("trace-end {id}: finish node {:?} finish_dist {:.1} total {:.1} checkpoints {:?}", track.finish, sim.geom.finish_dist, sim.geom.total_len, sim.geom.checkpoint_dist);
                 for st in ro.states.iter().skip(n.saturating_sub(300)).step_by(15) {
                     let loc = sim.geom.locate(st.x, st.y, st.seg as usize);
-                    println!("  t={:4} prog {:7.1} lat {:6.2}/{:.1} v {:5.1} h {:6.1} air {:3} cp {} walls {:3} stuck {}", st.tick, st.progress, loc.lateral, loc.half_width, st.speed(), st.h, st.air_ticks, st.next_checkpoint, st.wall_hits, st.stuck_ticks);
+                    let layers: Vec<String> = sim
+                        .geom
+                        .world
+                        .as_ref()
+                        .map(|w| {
+                            (0..12)
+                                .filter_map(|k| {
+                                    w.layer_at(st.x, st.y, st.h - 60.0 + k as f32 * 10.0, 5.0)
+                                })
+                                .map(|l| format!("{:.0}", l.y))
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .into_iter()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    println!("  t={:4} xz ({:6.0},{:6.0}) cell ({:3.0},{:3.0}) prog {:7.1} lat {:6.1} v {:5.1} h {:6.1} air {:3} cp {} walls {:3} layers {:?}", st.tick, st.x, st.y, (st.x / 32.0).floor(), (st.y / 32.0).floor(), st.progress, loc.lateral, st.speed(), st.h, st.air_ticks, st.next_checkpoint, st.wall_hits, layers);
                 }
             }
         }
@@ -176,7 +195,50 @@ fn main() -> anyhow::Result<()> {
     }
     abs_errs.sort();
     let med = abs_errs.get(abs_errs.len() / 2).copied().unwrap_or(0);
-    println!("\nreplays {}: maps compiled start-to-finish {}, sim finished {} (within 10% of real time: {}), median |error| of finished {} ms", rows.len(), compiled_full, finished, within10, med);
+    // Honest accuracy metric: a compiled route is only usable when its length
+    // is plausible for the real time (5-70 m/s average). Short stubs that the
+    // car trivially "finishes" do not count.
+    let usable: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            let v = r.4 / (r.5 as f32 / 1000.0);
+            (5.0..=70.0).contains(&v)
+        })
+        .collect();
+    let u_fin = usable.iter().filter(|r| r.6).count();
+    let u_10 = usable
+        .iter()
+        .filter(|r| {
+            r.11.map(|e| (e.abs() as f64) < r.5 as f64 * 0.1)
+                .unwrap_or(false)
+        })
+        .count();
+    let u_25 = usable
+        .iter()
+        .filter(|r| {
+            r.11.map(|e| (e.abs() as f64) < r.5 as f64 * 0.25)
+                .unwrap_or(false)
+        })
+        .count();
+    let mut u_errs: Vec<i64> = usable
+        .iter()
+        .filter_map(|r| r.11.map(|e| e.abs()))
+        .collect();
+    u_errs.sort();
+    println!("\nreplays {}: maps compiled start-to-finish {}, sim finished {} (within 10%: {}), median |error| {} ms", rows.len(), compiled_full, finished, within10, med);
+    if args.iter().any(|a| a == "--usable") {
+        for r in &usable {
+            println!("usable {:<8} chain {:>4} finish {:<3} len {:>6.0} real {:>7} sim {:>7} prog {:>6.0} walls {:>5}", r.0, r.3, if r.2 { "yes" } else { "no" }, r.4, r.5, if r.6 { r.7.to_string() } else { "DNF".into() }, r.8, r.9);
+        }
+    }
+    println!(
+        "usable geometry (plausible route length for the real time): {} runs; sim finished {}, within 25%: {}, within 10%: {}, median |error| {:?} ms",
+        usable.len(),
+        u_fin,
+        u_25,
+        u_10,
+        u_errs.get(u_errs.len() / 2)
+    );
     let mut dnf_progress: BTreeMap<u32, usize> = BTreeMap::new();
     for r in rows.iter().filter(|r| !r.6) {
         *dnf_progress

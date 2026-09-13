@@ -105,6 +105,11 @@ pub fn validate_spec(s: &Session, spec: &mut ExperimentSpec) -> anyhow::Result<(
             *budget_ticks = (*budget_ticks).clamp(1_000_000, cap);
             *probe_runs = (*probe_runs).clamp(1, 64);
         }
+        ExperimentSpec::ReplayBench { tracks } => {
+            for t in tracks.iter() {
+                s.track(t)?;
+            }
+        }
         ExperimentSpec::CalibrateReplays {
             tracks,
             generations,

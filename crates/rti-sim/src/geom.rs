@@ -6,6 +6,8 @@ pub struct TrackGeom {
     pub track: Track,
     /// 3D drivable surface (None = planar track).
     pub world: Option<std::sync::Arc<crate::world::World>>,
+    /// Marker pieces in the world: (piece id, kind) with kind 1 = checkpoint, 2 = finish.
+    pub markers: Vec<(u32, u8)>,
     /// node heights
     pub hs: Vec<f32>,
     pub xs: Vec<f32>,
@@ -66,6 +68,7 @@ impl TrackGeom {
         let finish_dist = cum[track.finish_node()];
         TrackGeom {
             world: None,
+            markers: Vec::new(),
             hs,
             track,
             xs,
@@ -87,6 +90,16 @@ impl TrackGeom {
             self.world = Some(std::sync::Arc::new(world));
         }
         self
+    }
+
+    pub fn with_markers(mut self, markers: Vec<(u32, u8)>) -> TrackGeom {
+        self.markers = markers;
+        self
+    }
+
+    /// Number of distinct checkpoint pieces (race requires all of them).
+    pub fn n_checkpoint_pieces(&self) -> usize {
+        self.markers.iter().filter(|m| m.1 == 1).count()
     }
 
     /// Surface height at centerline distance `d`.

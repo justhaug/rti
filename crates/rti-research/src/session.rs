@@ -125,7 +125,19 @@ impl Session {
             ),
             None => self.archive.current_physics()?,
         };
-        Ok((Sim::new(params, TrackGeom::new(track.clone())), hash))
+        let mut geom = TrackGeom::new(track.clone());
+        if let Some(wh) = &track.world_hash {
+            if let Ok(bytes) = self
+                .archive
+                .cas
+                .get_bytes(&rti_core::ContentHash(wh.clone()))
+            {
+                if let Ok(world) = rti_sim::World::from_bytes(&bytes) {
+                    geom = geom.with_world(world).with_markers(track.markers.clone());
+                }
+            }
+        }
+        Ok((Sim::new(params, geom), hash))
     }
 
     /// Flush buffered LLM usage into the archive ledger.

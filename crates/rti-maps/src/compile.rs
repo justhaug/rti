@@ -244,8 +244,15 @@ fn place(block: &MapBlock, cat: &Catalog, origin_cell: bool, yaw_sign: f32) -> O
     ];
     // platform and deco blocks are solids with the drivable surface on top;
     // road blocks drive at their base height (RTI_TOP_OFFSET env overrides for experiments)
-    let top = if block.name.starts_with("Deco") || block.name.starts_with("Platform") {
+    // Mined from the corpus (heightmine, Platform→Road neighbours): platform blocks are 8 m tall
+    // solids whose drivable top is 8 m above the block base; roads drive at their base height.
+    let top = if block.name.starts_with("Platform") {
         std::env::var("RTI_TOP_OFFSET")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8.0)
+    } else if block.name.starts_with("Deco") {
+        std::env::var("RTI_DECO_OFFSET")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0)
@@ -786,7 +793,7 @@ pub fn compile_track(
     cat: &Catalog,
     name: &str,
 ) -> anyhow::Result<(Track, CompileReport)> {
-    let (t, r, _) = compile_inner(map, cat, name, None)?;
+    let (t, r, _, _) = compile_inner(map, cat, name, None)?;
     Ok((t, r))
 }
 
@@ -797,13 +804,39 @@ pub fn compile_track3(
     cat: &Catalog,
     name: &str,
 ) -> anyhow::Result<(Track, CompileReport, rti_sim::World)> {
-    let (t, r, pieces) = compile_inner(map, cat, name, None)?;
-    let patches: Vec<rti_sim::Patch> = pieces
+    let (t, r, w, _) = compile_track3_full(map, cat, name)?;
+    Ok((t, r, w))
+}
+
+/// `compile_track3` plus the marker pieces `(piece id, kind)` with kind
+/// 1 = checkpoint, 2 = finish, for surface-based race triggers.
+pub fn compile_track3_full(
+    map: &ParsedMap,
+    cat: &Catalog,
+    name: &str,
+) -> anyhow::Result<(Track, CompileReport, rti_sim::World, Vec<(u32, u8)>)> {
+    let (t, r, pieces, chained) = compile_inner(map, cat, name, None)?;
+    // The chained route is drivable by construction: rasterise a corridor along
+    // the compiled polyline first, so that blocks we do not model (wall rides,
+    // loops, diagonals, transitions) leave no hole in the surface. Real piece
+    // geometry is layered on top of it.
+    let mut patches: Vec<rti_sim::Patch> = corridor_patches(&t);
+    patches.extend(pieces.iter().enumerate().map(|(i, p)| p.patch(i as u32)));
+    // Only markers on the chained route count: a map may hold checkpoint or
+    // finish blocks belonging to other routes or to unused scenery.
+    let markers: Vec<(u32, u8)> = chained
         .iter()
-        .enumerate()
-        .map(|(i, p)| p.patch(i as u32))
+        .filter_map(|&i| match pieces[i].marker {
+            Some(Marker::Checkpoint) => Some((i as u32, 1)),
+            Some(Marker::Finish) | Some(Marker::StartFinish) => Some((i as u32, 2)),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect();
-    Ok((t, r, rti_sim::World::from_patches(&patches)))
+    let mut t = t;
+    t.markers = markers.clone();
+    Ok((t, r, rti_sim::World::from_patches(&patches), markers))
 }
 
 /// Like `compile_track`, optionally forcing the multi-cell origin convention.
@@ -813,7 +846,7 @@ pub fn compile_track_with(
     name: &str,
     force_origin_cell: Option<bool>,
 ) -> anyhow::Result<(Track, CompileReport)> {
-    let (t, r, _) = compile_inner(map, cat, name, force_origin_cell)?;
+    let (t, r, _, _) = compile_inner(map, cat, name, force_origin_cell)?;
     Ok((t, r))
 }
 
@@ -822,7 +855,7 @@ fn compile_inner(
     cat: &Catalog,
     name: &str,
     force_origin_cell: Option<bool>,
-) -> anyhow::Result<(Track, CompileReport, Vec<Piece>)> {
+) -> anyhow::Result<(Track, CompileReport, Vec<Piece>, Vec<usize>)> {
     let mut report = CompileReport {
         blocks_total: map.blocks.len(),
         ..Default::default()
@@ -1002,6 +1035,8 @@ fn compile_inner(
         finish,
         max_ticks: 12_000,
         tm_map_uid: Some(map.info.uid.clone()),
+        world_hash: None,
+        markers: Vec::new(),
         tm_map_file: Some(format!("RTI/{name}.Map.Gbx")),
         tm_frame: None,
         walls: true,
@@ -1017,7 +1052,54 @@ fn compile_inner(
     report.checkpoints = track.checkpoints.len();
     report.length_m = track.length();
     track.validate()?;
-    Ok((track, report, pieces))
+    Ok((
+        track,
+        report,
+        pieces,
+        ch.seq.iter().map(|&(pi, _, _)| pi).collect(),
+    ))
+}
+
+/// Rasterise a drivable corridor along the track polyline: a road-kind
+/// surface of the node half-widths at the interpolated node heights.
+fn corridor_patches(track: &Track) -> Vec<rti_sim::Patch> {
+    let mut out = vec![];
+    for w in track.nodes.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let len = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+        if len < 1e-3 {
+            continue;
+        }
+        let (dx, dy) = ((b.x - a.x) / len, (b.y - a.y) / len);
+        let extra: f32 = std::env::var("RTI_CORRIDOR_EXTRA")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
+        let hw = a.half_width.max(b.half_width) + extra;
+        let pad = hw + 2.0;
+        let x0 = a.x.min(b.x) - pad;
+        let x1 = a.x.max(b.x) + pad;
+        let z0 = a.y.min(b.y) - pad;
+        let z1 = a.y.max(b.y) + pad;
+        let surf = a.surface.index() as u8;
+        out.push(rti_sim::world::rasterize(x0, z0, x1, z1, move |x, z| {
+            // project onto the segment
+            let t = (((x - a.x) * dx + (z - a.y) * dy) / len).clamp(0.0, 1.0);
+            let px = a.x + dx * len * t;
+            let pz = a.y + dy * len * t;
+            let lat = ((x - px).powi(2) + (z - pz).powi(2)).sqrt();
+            if lat > a.half_width * (1.0 - t) + b.half_width * t + extra {
+                return None;
+            }
+            Some(rti_sim::Layer {
+                y: a.h + (b.h - a.h) * t,
+                surface: surf,
+                kind: 0,
+                piece: u32::MAX,
+            })
+        }));
+    }
+    out
 }
 
 pub fn truncate(s: &str, n: usize) -> String {

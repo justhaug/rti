@@ -447,6 +447,9 @@ impl Archive {
                 (Some(method.name().to_string()), Some(track.clone()))
             }
             ExperimentSpec::Calibrate { tracks, .. } => (None, tracks.first().cloned()),
+            ExperimentSpec::ReplayBench { tracks } => {
+                (Some("bench".into()), tracks.first().cloned())
+            }
             ExperimentSpec::CalibrateReplays { tracks, .. } => {
                 (Some("replays".into()), tracks.first().cloned())
             }
