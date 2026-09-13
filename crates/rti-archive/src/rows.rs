@@ -198,3 +198,28 @@ pub struct MethodStats {
     pub wall_ms: u64,
     pub llm_usd: f64,
 }
+
+impl TaskRow {
+    pub fn new(
+        kind: &str,
+        title: &str,
+        description: &str,
+        priority: i32,
+        cycle: Option<i64>,
+    ) -> TaskRow {
+        TaskRow {
+            id: String::new(),
+            cycle,
+            kind: kind.into(),
+            title: title.into(),
+            description: description.into(),
+            status: "pending".into(),
+            priority,
+            branch: None,
+            result_json: None,
+            cost: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+}
