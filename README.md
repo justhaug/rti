@@ -21,7 +21,23 @@ export OPENROUTER_API_KEY=...            # optional; without it the scripted bra
 ./target/release/rti research --cycles 5 --with-tasks
 ./target/release/rti context             # what the researcher sees
 ./target/release/rti query "select method, track, min(time_ms) from trajectories where finished group by 1,2"
+
+# real maps from Trackmania Exchange
+./target/release/rti map search --name kacky --count 5
+./target/release/rti map import 356566   # or a TMX URL, or a local .Map.Gbx
+./target/release/rti search tmx356566_how_to_map --method beam
+
+# long-running process with UI + operator chat at http://127.0.0.1:8787/
+./target/release/rti serve --port 8787
 ```
+
+## The UI (`rti serve`)
+
+One process owns the archive, runs the research loop in the background and serves a JSON API plus
+a single-page UI: chat with the *operator* agent ("import TMX map 356566 and find a line with beam
+search", "why did calibration stop improving?", "start the loop for 20 cycles"), watch the live log,
+browse experiments/findings/tasks/ledger, draw tracks with their best sim and oracle trajectories,
+run SQL against the archive, and import maps. The operator has tools for everything the CLI can do.
 
 Useful examples:
 
@@ -45,6 +61,7 @@ cargo run --release -p rti-search --example compare -- hairpin 20000000
 ## Status
 
 Bootstrapped harness. Simulator, search, nets, archive, oracle contract, LLM roles, coding
-harness and the research loop all run end to end against the hidden-sim oracle. The TM2020
-bridge plugin (Openplanet under Proton) is not included; the client and protocol are
-(`docs/oracle.md`).
+harness, research loop, map ingestion and the server/UI all run end to end against the
+hidden-sim oracle. Not included: the TM2020 bridge plugin (Openplanet under Proton) — the client
+and protocol are (`docs/oracle.md`) — and a full vanilla block catalog: imported TMX maps compile
+to a drivable prefix of the road wherever the catalog runs out (`docs/maps.md`).

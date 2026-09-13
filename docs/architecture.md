@@ -37,6 +37,8 @@ rti-archive   DuckDB schema (tracks, physics, experiments, trajectories, verific
 rti-llm       OpenRouter client, role routing, retries/fallbacks, cost accounting, JSON mode
 rti-agent     coding harness: worktree, builtin tool-loop agent or external command, gates
 rti-research  Session, context builder, brains (LLM / scripted), experiment runner, cycle, tasks
+rti-maps      Trackmania Exchange client, GBX decoder, block catalog, map → Track compiler
+rti-server    long-running process: JSON API, background loop, operator agent, UI
 rti-cli       `rti` binary
 ```
 
@@ -55,8 +57,18 @@ repeat
 ```
 
 `ExperimentSpec` is the fixed, executable vocabulary the researcher chooses from:
-`search`, `verify`, `calibrate`, `train_bc`, `benchmark`, `generate_track`. Anything that needs
-new code becomes a coding task instead.
+`search`, `verify`, `calibrate`, `train_bc`, `benchmark`, `generate_track`, `import_map`. Anything
+that needs new code becomes a coding task instead.
+
+## Processes
+
+`rti serve` is the intended long-running deployment: one process owns the DuckDB archive
+(single writer), runs the research loop in a background thread, executes queued tasks, and
+exposes everything over HTTP (`docs/maps.md` and `crates/rti-server/src/api.rs` list the
+endpoints). The operator agent in the UI is an LLM tool loop over the same operations the CLI
+offers, so a person can direct the researcher ("focus on ice maps", "verify that trajectory",
+"import this TMX map") and inspect the archive while it runs. The CLI is for one-off runs and
+scripting against the same data directory when the server is not running.
 
 ## Value function
 

@@ -19,6 +19,8 @@ crates/rti-archive   DuckDB archive + BLAKE3 content-addressed store (data/)
 crates/rti-llm       OpenRouter client, role→model routing, cost accounting
 crates/rti-agent     coding worker harness: worktree, gates, builtin/external agents
 crates/rti-research  the research loop: context → hypothesis → experiment → analysis → findings
+crates/rti-maps      TMX client, GBX (.Map.Gbx) decoder, block catalog, map → Track compiler
+crates/rti-server    `rti serve`: JSON API, background loop, operator agent, single-page UI
 crates/rti-cli       the `rti` binary
 tracks/              track definitions (TOML); docs/ design docs; prompts/ role prompts
 ```
@@ -36,6 +38,9 @@ tracks/              track definitions (TOML); docs/ design docs; prompts/ role 
 6. Trajectory `world` strings are `sim:<params-hash>` or `oracle:<name>`; search experiment results carry
    `finished` and `best_time_ms` so `method_stats` can aggregate them.
 7. Nothing in the research loop may read `HiddenSim::truth()`; the oracle is a black box.
+8. Map ingestion is best effort and must stay that way: `parse_map` and `compile_track` report
+   what they could not decode (`warnings`, `unrecognized`) instead of failing. Extending block
+   coverage happens in `catalog.toml` / `catalog::DEFAULT_CATALOG` and `compile::local_geometry`.
 
 ## Workflow
 
