@@ -60,11 +60,17 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         };
-        let (track, report) = match rti_maps::compile_track(&map, &cat, &id) {
+        let (track, report, world) = match rti_maps::compile::compile_track3(&map, &cat, &id) {
             Ok(x) => x,
             Err(_) => continue,
         };
-        let sim = Sim::new(params.clone(), TrackGeom::new(track.clone()));
+        let flat = args.iter().any(|a| a == "--flat");
+        let geom = if flat {
+            TrackGeom::new(track.clone())
+        } else {
+            TrackGeom::new(track.clone()).with_world(world)
+        };
+        let sim = Sim::new(params.clone(), geom);
         let acts = inputs_to_actions(&ghost.inputs, ghost.ticks + 500);
         let ro = rollout(&sim, &sim.initial_state(), &acts, ghost.ticks + 500, true);
         if let Some(i) = args.iter().position(|a| a == "--trace") {
@@ -77,7 +83,7 @@ fn main() -> anyhow::Result<()> {
                 for st in ro.states.iter().step_by(10).take(60) {
                     let loc = sim.geom.locate(st.x, st.y, st.seg as usize);
                     let a = acts[(st.tick as usize).min(acts.len() - 1)];
-                    println!("  t={:4} prog {:6.1} lat {:6.2}/{:.1} v {:5.1} hdg {:5.2} dir {:5.2} walls {:3} in: steer {:+.2} gas {} brake {}", st.tick, st.progress, loc.lateral, loc.half_width, st.speed(), st.heading, loc.dir, st.wall_hits, a.steer, a.gas as u8, a.brake as u8);
+                    println!("  t={:4} prog {:6.1} lat {:6.2}/{:.1} v {:5.1} h {:6.1} air {:3} hdg {:5.2} dir {:5.2} walls {:3} in: steer {:+.2} gas {} brake {}", st.tick, st.progress, loc.lateral, loc.half_width, st.speed(), st.h, st.air_ticks, st.heading, loc.dir, st.wall_hits, a.steer, a.gas as u8, a.brake as u8);
                 }
             }
         }

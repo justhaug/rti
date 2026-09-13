@@ -14,8 +14,10 @@ pub mod observe;
 pub mod physics;
 pub mod rollout;
 pub mod tracks;
+pub mod world;
 
 pub use geom::TrackGeom;
 pub use observe::{observe, OBS_DIM};
 pub use physics::{Ext, Sim};
 pub use rollout::{rollout, rollout_batch, rollout_with, Rollout};
+pub use world::{Layer, Patch, World};

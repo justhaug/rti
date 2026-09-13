@@ -32,6 +32,12 @@ pub struct CarState {
     pub seg: u32,
     /// Consecutive ticks with negligible speed (stuck detection).
     pub stuck_ticks: u32,
+    /// Height above the map origin (metres). 0 on planar tracks.
+    pub h: f32,
+    /// Vertical speed (m/s).
+    pub vh: f32,
+    /// Ticks spent airborne in the current flight (0 when grounded).
+    pub air_ticks: u32,
 }
 
 impl CarState {

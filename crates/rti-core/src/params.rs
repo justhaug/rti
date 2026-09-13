@@ -49,6 +49,13 @@ pub struct PhysicsParams {
     /// Aerodynamic downforce: extra lateral grip proportional to speed² (1/m).
     #[serde(default)]
     pub downforce: f32,
+    /// Fraction of horizontal speed kept when landing from a jump.
+    #[serde(default = "default_landing_keep")]
+    pub landing_keep: f32,
+}
+
+fn default_landing_keep() -> f32 {
+    0.97
 }
 
 impl Default for PhysicsParams {
@@ -77,6 +84,7 @@ impl Default for PhysicsParams {
             max_speed: 107.0,
             drive_tau: 0.31,
             downforce: 0.0,
+            landing_keep: 0.97,
         }
     }
 }
@@ -117,6 +125,7 @@ impl PhysicsParams {
             "max_speed",
             "drive_tau",
             "downforce",
+            "landing_keep",
         ]
     }
 
@@ -144,14 +153,15 @@ impl PhysicsParams {
             self.max_speed,
             self.drive_tau,
             self.downforce,
+            self.landing_keep,
         ]);
         v
     }
 
     pub fn from_vec(v: &[f32]) -> anyhow::Result<Self> {
         anyhow::ensure!(
-            v.len() == 25 || v.len() == 26,
-            "expected 25 or 26 params, got {}",
+            (25..=27).contains(&v.len()),
+            "expected 25-27 params, got {}",
             v.len()
         );
         Ok(PhysicsParams {
@@ -175,6 +185,7 @@ impl PhysicsParams {
             max_speed: v[23],
             drive_tau: v[24].max(0.01),
             downforce: v.get(25).copied().unwrap_or(0.0).max(0.0),
+            landing_keep: v.get(26).copied().unwrap_or(0.97).clamp(0.5, 1.0),
         })
     }
 

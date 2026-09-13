@@ -11,6 +11,7 @@ use rti_sim::{rollout, Sim, TrackGeom};
 struct Case {
     id: String,
     track: Track,
+    world: std::sync::Arc<rti_sim::World>,
     actions: Vec<Action>,
     real_ms: u32,
     cps_ms: Vec<u32>,
@@ -35,7 +36,7 @@ fn load(dir: &str) -> anyhow::Result<Vec<Case>> {
         if g.inputs.is_empty() || g.race_time_ms == 0 {
             continue;
         }
-        let Ok((track, rep)) = rti_maps::compile_track(m, &cat, "x") else {
+        let Ok((track, rep, world)) = rti_maps::compile::compile_track3(m, &cat, "x") else {
             continue;
         };
         let full = rep.finish_found && rep.start_found;
@@ -45,6 +46,7 @@ fn load(dir: &str) -> anyhow::Result<Vec<Case>> {
             continue;
         }
         out.push(Case {
+            world: std::sync::Arc::new(world),
             id: rf
                 .file_name()
                 .unwrap()
@@ -63,7 +65,9 @@ fn load(dir: &str) -> anyhow::Result<Vec<Case>> {
 
 /// Loss for one case (ms-equivalent). DNF: big penalty scaled by remaining track.
 fn case_loss(c: &Case, params: &PhysicsParams) -> (f64, bool, u32, f32) {
-    let sim = Sim::new(params.clone(), TrackGeom::new(c.track.clone()));
+    let mut geom = TrackGeom::new(c.track.clone());
+    geom.world = Some(c.world.clone());
+    let sim = Sim::new(params.clone(), geom);
     let ro = rollout(
         &sim,
         &sim.initial_state(),

@@ -153,6 +153,11 @@ fn leading_number(tok: &str, prefix: &str) -> Option<u32> {
         .ok()
 }
 
+/// Public wrapper for `dims`.
+pub fn dims_pub(tok: &str) -> Option<(u32, u32)> {
+    dims(tok)
+}
+
 /// Trailing "2x1" style dimensions in a token → (a, b).
 fn dims(tok: &str) -> Option<(u32, u32)> {
     let b: Vec<u8> = tok.bytes().collect();

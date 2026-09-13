@@ -40,6 +40,12 @@ type P2 = (f32, f32);
 /// A placed piece in world (planar) coordinates.
 #[derive(Clone, Debug)]
 struct Piece {
+    /// 3D template (heights, drivable mask)
+    t3: crate::shape3d::Template3,
+    /// world (x,z) -> local (u,v): [a, b, c, d, e, f] with u = a*x + b*z + e, v = c*x + d*z + f
+    to_local: [f32; 6],
+    /// height of each port (metres)
+    port_h: Vec<f32>,
     ports: Vec<P2>,
     /// outward unit direction at each port
     dirs: Vec<P2>,
@@ -159,7 +165,9 @@ fn local(
 fn place(block: &MapBlock, cat: &Catalog, origin_cell: bool, yaw_sign: f32) -> Option<Piece> {
     let res = cat.resolve(&block.name)?;
     let t = &res.template;
+    let t3 = crate::shape3d::template3(&block.name, &res);
     let (ports, dirs, path, (min_i, w, l)) = local(t.shape, t.len, t.size, t.shift);
+    let local_ports = ports.clone();
     let pivot = (CELL / 2.0, CELL / 2.0);
     let (to_world, to_world_dir): (Box<dyn Fn(P2) -> P2>, Box<dyn Fn(P2) -> P2>) = if block.free {
         let pos = block.free_pos?;
@@ -208,7 +216,42 @@ fn place(block: &MapBlock, cat: &Catalog, origin_cell: bool, yaw_sign: f32) -> O
         (min_i as f32 + w as f32 / 2.0) * CELL,
         l as f32 * CELL / 2.0,
     ));
+    // world->local affine from three mapped points: world = o + u*(ex-o) + v*(ez-o)
+    let o = to_world((0.0, 0.0));
+    let ex = to_world((1.0, 0.0));
+    let ez = to_world((0.0, 1.0));
+    let (ax, az) = (ex.0 - o.0, ex.1 - o.1);
+    let (bx, bz) = (ez.0 - o.0, ez.1 - o.1);
+    let det = ax * bz - bx * az;
+    let (ia, ib, ic, id) = if det.abs() > 1e-9 {
+        (bz / det, -bx / det, -az / det, ax / det)
+    } else {
+        (1.0, 0.0, 0.0, 1.0)
+    };
+    let to_local = [
+        ia,
+        ib,
+        ic,
+        id,
+        -(ia * o.0 + ib * o.1),
+        -(ic * o.0 + id * o.1),
+    ];
+    let base_y = block
+        .free_pos
+        .map(|p| p[1])
+        .unwrap_or(block.coord[1] as f32 * 8.0);
+    let port_h: Vec<f32> = local_ports
+        .iter()
+        .map(|&(u, v)| {
+            let uu = u.clamp(min_i as f32 * CELL + 0.5, (min_i + w) as f32 * CELL - 0.5);
+            let vv = v.clamp(0.5, l as f32 * CELL - 0.5);
+            base_y + t3.height(uu, vv).unwrap_or(0.0)
+        })
+        .collect();
     Some(Piece {
+        t3,
+        to_local,
+        port_h,
         ports: ports.into_iter().map(|p| to_world(p)).collect(),
         dirs: dirs.into_iter().map(|d| to_world_dir(d)).collect(),
         centre,
@@ -216,11 +259,51 @@ fn place(block: &MapBlock, cat: &Catalog, origin_cell: bool, yaw_sign: f32) -> O
         half_width: t.half_width,
         surface: res.surface,
         marker: t.marker,
-        y: block
-            .free_pos
-            .map(|p| p[1])
-            .unwrap_or(block.coord[1] as f32 * 8.0),
+        y: base_y,
     })
+}
+
+impl Piece {
+    #[inline]
+    fn local(&self, x: f32, z: f32) -> (f32, f32) {
+        let m = &self.to_local;
+        (m[0] * x + m[1] * z + m[4], m[2] * x + m[3] * z + m[5])
+    }
+
+    /// Surface height at world (x, z) if drivable on this piece.
+    pub fn height_at(&self, x: f32, z: f32) -> Option<f32> {
+        let (u, v) = self.local(x, z);
+        self.t3.height(u, v).map(|h| self.y + h)
+    }
+
+    fn bbox(&self) -> (f32, f32, f32, f32) {
+        let mut xmin = f32::INFINITY;
+        let mut xmax = f32::NEG_INFINITY;
+        let mut zmin = f32::INFINITY;
+        let mut zmax = f32::NEG_INFINITY;
+        for &(x, z) in &self.ports {
+            xmin = xmin.min(x);
+            xmax = xmax.max(x);
+            zmin = zmin.min(z);
+            zmax = zmax.max(z);
+        }
+        let pad = (self.t3.fp.1.max(self.t3.fp.2) as f32) * CELL;
+        (xmin - pad, zmin - pad, xmax + pad, zmax + pad)
+    }
+
+    fn patch(&self, id: u32) -> rti_sim::Patch {
+        let (x0, z0, x1, z1) = self.bbox();
+        let surf = self.surface.index() as u8;
+        let kind = if self.t3.open { 1 } else { 0 };
+        rti_sim::world::rasterize(x0, z0, x1, z1, |x, z| {
+            self.height_at(x, z).map(|y| rti_sim::Layer {
+                y,
+                surface: surf,
+                kind,
+                piece: id,
+            })
+        })
+    }
 }
 
 fn key(p: P2) -> (i32, i32) {
@@ -377,11 +460,11 @@ fn dijkstra(
                         if dj.0 * d_out.0 + dj.1 * d_out.1 > -0.5 {
                             continue;
                         }
-                        let dy = (pieces[j].y - p.y).abs();
-                        if dy > 24.0 {
+                        let dy = (pieces[j].port_h[k] - p.port_h[exit]).abs();
+                        if dy > 12.0 {
                             continue;
                         }
-                        targets.push(((j, k), 1.0 + turn + cells as f32 * 2.0 + dy * 0.2, cells));
+                        targets.push(((j, k), 1.0 + turn + cells as f32 * 2.0 + dy * 0.5, cells));
                     }
                     if !targets.is_empty() {
                         break;
@@ -630,17 +713,43 @@ pub fn compile_track(
     cat: &Catalog,
     name: &str,
 ) -> anyhow::Result<(Track, CompileReport)> {
-    compile_track_with(map, cat, name, None)
+    let (t, r, _) = compile_inner(map, cat, name, None)?;
+    Ok((t, r))
 }
 
-/// Like `compile_track`, optionally forcing the multi-cell origin convention
-/// (`Some(true)` = origin cell, `Some(false)` = bounding-box minimum).
+/// Compile to a track plus the 3D drivable world (all recognised pieces
+/// rasterised, not only the chained ones).
+pub fn compile_track3(
+    map: &ParsedMap,
+    cat: &Catalog,
+    name: &str,
+) -> anyhow::Result<(Track, CompileReport, rti_sim::World)> {
+    let (t, r, pieces) = compile_inner(map, cat, name, None)?;
+    let patches: Vec<rti_sim::Patch> = pieces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| p.patch(i as u32))
+        .collect();
+    Ok((t, r, rti_sim::World::from_patches(&patches)))
+}
+
+/// Like `compile_track`, optionally forcing the multi-cell origin convention.
 pub fn compile_track_with(
     map: &ParsedMap,
     cat: &Catalog,
     name: &str,
     force_origin_cell: Option<bool>,
 ) -> anyhow::Result<(Track, CompileReport)> {
+    let (t, r, _) = compile_inner(map, cat, name, force_origin_cell)?;
+    Ok((t, r))
+}
+
+fn compile_inner(
+    map: &ParsedMap,
+    cat: &Catalog,
+    name: &str,
+    force_origin_cell: Option<bool>,
+) -> anyhow::Result<(Track, CompileReport, Vec<Piece>)> {
     let mut report = CompileReport {
         blocks_total: map.blocks.len(),
         ..Default::default()
@@ -725,6 +834,7 @@ pub fn compile_track_with(
         let path = path_through(p, a, b);
         let start_idx = nodes.len();
         for (k, &(x, y)) in path.iter().enumerate() {
+            let h = p.height_at(x, y).unwrap_or(p.y);
             if i > 0 && k == 0 {
                 if let Some(last) = nodes.last() {
                     // bridge gap with a straight segment (last node → this port)
@@ -732,6 +842,7 @@ pub fn compile_track_with(
                         nodes.push(TrackNode {
                             x,
                             y,
+                            h,
                             half_width: p.half_width,
                             surface: p.surface,
                         });
@@ -747,6 +858,7 @@ pub fn compile_track_with(
             nodes.push(TrackNode {
                 x,
                 y,
+                h,
                 half_width: p.half_width,
                 surface: p.surface,
             });
@@ -778,6 +890,7 @@ pub fn compile_track_with(
                 nodes[i] = TrackNode {
                     x: a.x + (b.x - a.x) * t,
                     y: a.y + (b.y - a.y) * t,
+                    h: a.h + (b.h - a.h) * t,
                     half_width: a.half_width,
                     surface: a.surface,
                 };
@@ -826,7 +939,7 @@ pub fn compile_track_with(
     report.checkpoints = track.checkpoints.len();
     report.length_m = track.length();
     track.validate()?;
-    Ok((track, report))
+    Ok((track, report, pieces))
 }
 
 pub fn truncate(s: &str, n: usize) -> String {

@@ -34,6 +34,10 @@ impl Ext {
 /// A run is declared stuck (terminal) after this many consecutive
 /// near-stationary ticks.
 pub const STUCK_TICKS: u32 = 200;
+/// Gravity (m/s²).
+pub const GRAVITY: f32 = 9.81;
+/// Falling this far below the last surface is a DNF (fell off the map).
+pub const FALL_LIMIT_M: f32 = 40.0;
 
 /// A simulator instance: physics params + compiled track. Cheap to clone.
 #[derive(Clone, Debug)]
@@ -60,10 +64,26 @@ impl Sim {
     /// Initial state on the start line, pointing down the first segment.
     pub fn initial_state(&self) -> CarState {
         let t = &self.geom.track;
+        let heading = t.start_heading();
+        let (mut x, mut y, mut h) = (t.nodes[0].x, t.nodes[0].y, t.nodes[0].h);
+        if let Some(w) = self.geom.world.as_ref() {
+            // snap the spawn onto the nearest drivable sample along the track
+            for k in 0..8 {
+                let px = t.nodes[0].x + heading.cos() * k as f32 * 0.5;
+                let py = t.nodes[0].y + heading.sin() * k as f32 * 0.5;
+                if let Some(g) = w.sample(px, py, h, 8.0) {
+                    x = px;
+                    y = py;
+                    h = g.y;
+                    break;
+                }
+            }
+        }
         CarState {
-            x: t.nodes[0].x,
-            y: t.nodes[0].y,
-            heading: t.start_heading(),
+            x,
+            y,
+            h,
+            heading,
             ..Default::default()
         }
     }
@@ -81,16 +101,37 @@ impl Sim {
 
         // --- where are we ---
         let loc = self.geom.locate(s.x, s.y, s.seg as usize);
-        let on_track = loc.lateral.abs() <= loc.half_width;
-        let si = loc.surface.index();
+        // 3D world: the surface under the car decides grip, slope and surface type
+        let ground = self
+            .geom
+            .world
+            .as_ref()
+            .and_then(|w| w.sample(s.x, s.y, s.h, 4.0));
+        let airborne = s.air_ticks > 0;
+        let on_track = match &ground {
+            Some(_) => !airborne,
+            None => loc.lateral.abs() <= loc.half_width && self.geom.world.is_none(),
+        };
+        let si = ground
+            .map(|g| g.surface.index())
+            .unwrap_or(loc.surface.index());
         let mut grip_mult = p.surface_grip[si];
         let mut drive_mult = p.surface_drive[si];
         let mut drag_mult = 1.0;
-        if !on_track {
+        if airborne {
+            // no tyre forces in the air
+            grip_mult = 0.0;
+            drive_mult = 0.0;
+        } else if !on_track {
             grip_mult *= p.offtrack_grip;
             drive_mult *= p.offtrack_grip;
             drag_mult = p.offtrack_drag;
             s.offtrack_ticks += 1;
+        }
+        // normal load on slopes/banking scales the available grip
+        let n_y = ground.map(|g| g.normal[1]).unwrap_or(1.0).clamp(0.2, 1.0);
+        if !airborne {
+            grip_mult *= n_y;
         }
 
         // --- steering column ---
@@ -184,6 +225,13 @@ impl Sim {
         // --- recompose, cap, integrate ---
         let mut vx = vf3 * ch2 - vl3 * sh2;
         let mut vy = vf3 * sh2 + vl3 * ch2;
+        if let Some(g) = ground {
+            if !airborne {
+                // gravity component along the surface (downhill push / banking)
+                vx += GRAVITY * g.normal[1] * g.normal[0] * dt;
+                vy += GRAVITY * g.normal[1] * g.normal[2] * dt;
+            }
+        }
         let sp = (vx * vx + vy * vy).sqrt();
         if sp > p.max_speed {
             vx *= p.max_speed / sp;
@@ -195,11 +243,93 @@ impl Sim {
         s.y += vy * dt;
         s.tick += 1;
 
+        // --- vertical dynamics on a 3D world ---
+        if let Some(world) = self.geom.world.as_ref() {
+            let prev_x = s.x - vx * dt;
+            let prev_y = s.y - vy * dt;
+            let under = world.sample(s.x, s.y, s.h, 6.0);
+            match under {
+                Some(g) if !airborne && s.h - g.y <= 0.35 + s.vh.max(0.0) * dt => {
+                    // grounded: follow the surface
+                    s.vh = (g.y - s.h) / dt;
+                    s.h = g.y;
+                    s.air_ticks = 0;
+                }
+                Some(g) if airborne => {
+                    s.vh -= GRAVITY * dt;
+                    s.h += s.vh * dt;
+                    s.air_ticks += 1;
+                    if s.h <= g.y {
+                        // landing: absorb vertical speed, keep most horizontal speed
+                        s.h = g.y;
+                        s.vh = 0.0;
+                        s.air_ticks = 0;
+                        s.vx *= p.landing_keep;
+                        s.vy *= p.landing_keep;
+                    }
+                }
+                Some(_) => {
+                    // surface dropped away: take off
+                    s.vh -= GRAVITY * dt;
+                    s.h += s.vh * dt;
+                    s.air_ticks += 1;
+                }
+                None => {
+                    // nothing drivable near our height: road pieces have walls, open pieces let us fall
+                    if !airborne && ground.map(|g| !g.open).unwrap_or(false) {
+                        // wall: slide along the road direction (centerline tangent),
+                        // drop the outward velocity component, lose speed with the impact
+                        let tx = loc.dir.cos();
+                        let ty = loc.dir.sin();
+                        let mx = s.x - prev_x;
+                        let my = s.y - prev_y;
+                        let along = mx * tx + my * ty;
+                        // slide along the road and nudge back toward the centerline
+                        let inward = -loc.lateral.signum();
+                        let mut placed = false;
+                        for nudge in [0.0f32, 0.3, 1.0, 2.5] {
+                            let cand = (
+                                prev_x + along * tx + inward * nudge * (-ty),
+                                prev_y + along * ty + inward * nudge * tx,
+                            );
+                            if world.layer_at(cand.0, cand.1, s.h, 4.0).is_some() {
+                                s.x = cand.0;
+                                s.y = cand.1;
+                                placed = true;
+                                break;
+                            }
+                        }
+                        if !placed {
+                            s.x = prev_x;
+                            s.y = prev_y;
+                        }
+                        let nx = -ty;
+                        let ny = tx;
+                        let vn = s.vx * nx + s.vy * ny;
+                        let speed = s.speed().max(1e-3);
+                        let impact = vn.abs() / speed;
+                        s.vx -= vn * nx;
+                        s.vy -= vn * ny;
+                        let keep = (1.0 - (1.0 - p.wall_restitution) * impact) * 0.995;
+                        s.vx *= keep;
+                        s.vy *= keep;
+                        if impact > 0.1 {
+                            s.wall_hits += 1;
+                        }
+                    } else {
+                        s.vh -= GRAVITY * dt;
+                        s.h += s.vh * dt;
+                        s.air_ticks += 1;
+                    }
+                }
+            }
+        }
+
         // --- track interaction after move ---
         let loc2 = self.geom.locate(s.x, s.y, loc.seg);
         s.seg = loc2.seg as u32;
         let over = loc2.lateral.abs() - loc2.half_width;
-        if self.geom.track.walls && over > 0.0 {
+        if self.geom.world.is_none() && self.geom.track.walls && over > 0.0 {
             // push back inside; kill the outward normal velocity; lose speed in
             // proportion to how head-on the contact is, plus grinding friction
             let nx = -loc2.dir.sin();
@@ -246,6 +376,12 @@ impl Sim {
     #[inline]
     pub fn is_terminal(&self, s: &CarState, max_ticks: u32) -> bool {
         if s.finished || s.tick >= max_ticks || s.stuck_ticks >= STUCK_TICKS {
+            return true;
+        }
+        if self.geom.world.is_some()
+            && s.air_ticks > 0
+            && s.h < self.geom.height_at(s.progress) - FALL_LIMIT_M
+        {
             return true;
         }
         if !self.geom.track.walls {

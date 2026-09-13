@@ -31,6 +31,9 @@ impl Surface {
 pub struct TrackNode {
     pub x: f32,
     pub y: f32,
+    /// Surface height at this node (metres, up). 0 for planar tracks.
+    #[serde(default)]
+    pub h: f32,
     /// Half-width of the drivable surface at this node (meters).
     pub half_width: f32,
     #[serde(default)]
@@ -156,6 +159,7 @@ impl Track {
         let mut nodes = vec![TrackNode {
             x: 0.0,
             y: 0.0,
+            h: 0.0,
             half_width,
             surface: Surface::Asphalt,
         }];
@@ -172,6 +176,7 @@ impl Track {
                     nodes.push(TrackNode {
                         x,
                         y,
+                        h: 0.0,
                         half_width,
                         surface,
                     });
@@ -187,6 +192,7 @@ impl Track {
                     nodes.push(TrackNode {
                         x,
                         y,
+                        h: 0.0,
                         half_width,
                         surface,
                     });

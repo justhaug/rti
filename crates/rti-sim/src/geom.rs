@@ -4,6 +4,10 @@ use rti_core::{Surface, Track};
 #[derive(Clone, Debug)]
 pub struct TrackGeom {
     pub track: Track,
+    /// 3D drivable surface (None = planar track).
+    pub world: Option<std::sync::Arc<crate::world::World>>,
+    /// node heights
+    pub hs: Vec<f32>,
     pub xs: Vec<f32>,
     pub ys: Vec<f32>,
     /// cumulative distance at each node
@@ -55,11 +59,14 @@ impl TrackGeom {
             cum[i + 1] = cum[i] + l;
         }
         let hw = track.nodes.iter().map(|n| n.half_width).collect();
+        let hs = track.nodes.iter().map(|n| n.h).collect();
         let surface = track.nodes.iter().map(|n| n.surface).collect();
         let total_len = cum[n - 1];
         let checkpoint_dist = track.checkpoints.iter().map(|&c| cum[c]).collect();
         let finish_dist = cum[track.finish_node()];
         TrackGeom {
+            world: None,
+            hs,
             track,
             xs,
             ys,
@@ -73,6 +80,20 @@ impl TrackGeom {
             checkpoint_dist,
             finish_dist,
         }
+    }
+
+    pub fn with_world(mut self, world: crate::world::World) -> TrackGeom {
+        if !world.is_empty() {
+            self.world = Some(std::sync::Arc::new(world));
+        }
+        self
+    }
+
+    /// Surface height at centerline distance `d`.
+    pub fn height_at(&self, d: f32) -> f32 {
+        let s = self.seg_at(d);
+        let t = ((d - self.cum[s]) / self.len[s]).clamp(0.0, 1.0);
+        self.hs[s] * (1.0 - t) + self.hs[s + 1] * t
     }
 
     pub fn n_segs(&self) -> usize {
