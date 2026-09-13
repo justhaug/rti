@@ -73,6 +73,16 @@ fn main() -> anyhow::Result<()> {
         let sim = Sim::new(params.clone(), geom);
         let acts = inputs_to_actions(&ghost.inputs, ghost.ticks + 500);
         let ro = rollout(&sim, &sim.initial_state(), &acts, ghost.ticks + 500, true);
+        if let Some(i) = args.iter().position(|a| a == "--trace-end") {
+            if args[i + 1] == id {
+                let n = ro.states.len();
+                println!("trace-end {id}: finish node {:?} finish_dist {:.1} total {:.1} checkpoints {:?}", track.finish, sim.geom.finish_dist, sim.geom.total_len, sim.geom.checkpoint_dist);
+                for st in ro.states.iter().skip(n.saturating_sub(300)).step_by(15) {
+                    let loc = sim.geom.locate(st.x, st.y, st.seg as usize);
+                    println!("  t={:4} prog {:7.1} lat {:6.2}/{:.1} v {:5.1} h {:6.1} air {:3} cp {} walls {:3} stuck {}", st.tick, st.progress, loc.lateral, loc.half_width, st.speed(), st.h, st.air_ticks, st.next_checkpoint, st.wall_hits, st.stuck_ticks);
+                }
+            }
+        }
         if let Some(i) = args.iter().position(|a| a == "--trace") {
             if args[i + 1] == id {
                 println!(

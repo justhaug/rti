@@ -5,6 +5,27 @@ fn main() -> anyhow::Result<()> {
     let path = std::env::args().nth(1).expect("map");
     let m = rti_maps::parse_map(&std::fs::read(&path)?)?;
     let cat = Catalog::default_catalog();
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--near") {
+        let v: Vec<i32> = args[i + 1].split(',').map(|s| s.parse().unwrap()).collect();
+        for b in &m.blocks {
+            if (b.coord[0] as i32 - v[0]).abs() <= 2 && (b.coord[2] as i32 - v[1]).abs() <= 2 {
+                println!(
+                    "  near {:<44} dir {} at {:?} y {} {}",
+                    b.name,
+                    b.dir,
+                    b.coord,
+                    b.coord[1] as f32 * 8.0,
+                    if cat.resolve(&b.name).is_some() {
+                        "[recognised]"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+        return Ok(());
+    }
     let rec: Vec<_> = m
         .blocks
         .iter()
@@ -51,6 +72,9 @@ fn main() -> anyhow::Result<()> {
                     rep.convention,
                     rep.bridged_gaps
                 );
+                for (k, c) in rep.chain.iter().enumerate().take(12) {
+                    println!("   chain[{k}] {c}");
+                }
                 let last = t.nodes.last().unwrap();
                 println!(
                     "   ends at ({:.1}, {:.1}) = cell ({:.2}, {:.2})",

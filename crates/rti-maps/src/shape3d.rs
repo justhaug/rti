@@ -49,6 +49,8 @@ pub struct Template3 {
     pub bank: Bank,
     pub half_width: f32,
     pub open: bool,
+    /// height of the piece's bottom/entry edge relative to its block base (mined)
+    pub base_shift: f32,
 }
 
 pub fn template3(name: &str, r: &Resolved) -> Template3 {
@@ -70,6 +72,7 @@ pub fn template3(name: &str, r: &Resolved) -> Template3 {
     // slope units from tokens: "Slope" = 1 unit per cell, "Slope2" = 2 units per cell
     let mut units_per_cell = 0.0f32;
     let mut profile = Profile::Flat;
+    let _ = &mut profile;
     for tok in &toks {
         if let Some(rest) = tok.strip_prefix("Slope") {
             let n: f32 = rest
@@ -127,6 +130,28 @@ pub fn template3(name: &str, r: &Resolved) -> Template3 {
     } else {
         Bank::None
     };
+    // mined data overrides the name heuristics when available
+    let mut base_shift = 0.0;
+    let off = |k: usize| {
+        r.port_offsets
+            .iter()
+            .find(|(p, _)| *p == k)
+            .map(|(_, v)| *v)
+    };
+    if let (Some(o0), Some(o1)) = (off(0), off(1)) {
+        base_shift = o0;
+        let mined_rise = o1 - o0;
+        if t.shape != Shape::Open {
+            if mined_rise.abs() > 0.5 && profile == Profile::Flat {
+                profile = Profile::Slope;
+            }
+            if profile != Profile::Flat || mined_rise.abs() > 0.5 {
+                rise = mined_rise;
+            }
+        }
+    } else if let Some(o0) = off(0) {
+        base_shift = o0;
+    }
     Template3 {
         shape: t.shape,
         len: t.len.max(1),
@@ -136,6 +161,7 @@ pub fn template3(name: &str, r: &Resolved) -> Template3 {
         profile,
         rise,
         bank,
+        base_shift,
         half_width: if t.shape == Shape::Open || r.template.half_width > 10.0 {
             16.0
         } else {
@@ -187,12 +213,13 @@ impl Template3 {
             return None;
         }
         let t = (v / l).clamp(0.0, 1.0);
-        let mut h = match self.profile {
-            Profile::Flat => 0.0,
-            Profile::Slope => self.rise * t,
-            Profile::SlopeStart => self.rise * (1.0 - (std::f32::consts::FRAC_PI_2 * t).cos()),
-            Profile::SlopeEnd => self.rise * (std::f32::consts::FRAC_PI_2 * t).sin(),
-        };
+        let mut h = self.base_shift
+            + match self.profile {
+                Profile::Flat => 0.0,
+                Profile::Slope => self.rise * t,
+                Profile::SlopeStart => self.rise * (1.0 - (std::f32::consts::FRAC_PI_2 * t).cos()),
+                Profile::SlopeEnd => self.rise * (std::f32::consts::FRAC_PI_2 * t).sin(),
+            };
         let bank = match self.bank {
             Bank::None => 0.0,
             Bank::Full(s) => s * TILT_RAD,

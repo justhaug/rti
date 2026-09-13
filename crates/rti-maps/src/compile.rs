@@ -33,6 +33,9 @@ pub struct CompileReport {
     pub length_m: f32,
     pub convention: String,
     pub warnings: Vec<String>,
+    /// Chained pieces in order: "name dir coord entry>exit".
+    #[serde(default)]
+    pub chain: Vec<String>,
 }
 
 type P2 = (f32, f32);
@@ -40,6 +43,9 @@ type P2 = (f32, f32);
 /// A placed piece in world (planar) coordinates.
 #[derive(Clone, Debug)]
 struct Piece {
+    name: String,
+    /// port heights come from mined corpus data (tight matching) or name heuristics (loose)
+    mined: bool,
     /// 3D template (heights, drivable mask)
     t3: crate::shape3d::Template3,
     /// world (x,z) -> local (u,v): [a, b, c, d, e, f] with u = a*x + b*z + e, v = c*x + d*z + f
@@ -236,10 +242,21 @@ fn place(block: &MapBlock, cat: &Catalog, origin_cell: bool, yaw_sign: f32) -> O
         -(ia * o.0 + ib * o.1),
         -(ic * o.0 + id * o.1),
     ];
+    // platform and deco blocks are solids with the drivable surface on top;
+    // road blocks drive at their base height (RTI_TOP_OFFSET env overrides for experiments)
+    let top = if block.name.starts_with("Deco") || block.name.starts_with("Platform") {
+        std::env::var("RTI_TOP_OFFSET")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
     let base_y = block
         .free_pos
         .map(|p| p[1])
-        .unwrap_or(block.coord[1] as f32 * 8.0);
+        .unwrap_or(block.coord[1] as f32 * 8.0)
+        + if block.free { 0.0 } else { top };
     let port_h: Vec<f32> = local_ports
         .iter()
         .map(|&(u, v)| {
@@ -249,6 +266,15 @@ fn place(block: &MapBlock, cat: &Catalog, origin_cell: bool, yaw_sign: f32) -> O
         })
         .collect();
     Some(Piece {
+        mined: res.port_offsets.iter().any(|(k, _)| *k == 0)
+            && res.port_offsets.iter().any(|(k, _)| *k == 1),
+        name: format!(
+            "{} dir {} at {:?}{}",
+            block.name,
+            block.dir,
+            block.coord,
+            if block.free { " FREE" } else { "" }
+        ),
         t3,
         to_local,
         port_h,
@@ -461,10 +487,25 @@ fn dijkstra(
                             continue;
                         }
                         let dy = (pieces[j].port_h[k] - p.port_h[exit]).abs();
-                        if dy > 12.0 {
+                        let tol = if p.mined && pieces[j].mined {
+                            3.0
+                        } else {
+                            12.0
+                        };
+                        if dy > tol {
                             continue;
                         }
-                        targets.push(((j, k), 1.0 + turn + cells as f32 * 2.0 + dy * 0.5, cells));
+                        // scenery pieces (deco platforms/hills) are drivable but rarely the intended road
+                        let deco = if pieces[j].name.starts_with("Deco") {
+                            3.0
+                        } else {
+                            0.0
+                        };
+                        targets.push((
+                            (j, k),
+                            1.0 + turn + cells as f32 * 2.0 + dy * 0.5 + deco,
+                            cells,
+                        ));
                     }
                     if !targets.is_empty() {
                         break;
@@ -628,9 +669,17 @@ fn chain_from(
                 .sum::<f32>()
         })
         .sum();
+    // scenery-only chains (deco platforms/hills) count half; starting at the real start block matters
+    let deco_frac = seq
+        .iter()
+        .filter(|&&(pi, _, _)| pieces[pi].name.starts_with("Deco"))
+        .count() as f32
+        / seq.len().max(1) as f32;
     let score = (
         0u32,
-        (metres + if finished { 300.0 } else { 0.0 } + if from_start { 100.0 } else { 0.0 }) as u32,
+        (metres * (1.0 - 0.5 * deco_frac)
+            + if finished { 300.0 } else { 0.0 }
+            + if from_start { 600.0 } else { 0.0 }) as u32,
     );
     if std::env::var("RTI_CHAIN_DEBUG").is_ok() {
         let p0 = pieces[s].ports[0];
@@ -706,6 +755,30 @@ fn chain(pieces: &[Piece]) -> Chain {
         gaps: 0,
         score: (0, 0),
     })
+}
+
+/// Placed pieces with their ports, for corpus mining: (block name, base y, [(x, z, dir_x, dir_z, port_h)]).
+pub fn placed_ports(
+    map: &ParsedMap,
+    cat: &Catalog,
+) -> Vec<(String, f32, Vec<(f32, f32, f32, f32, f32)>)> {
+    map.blocks
+        .iter()
+        .filter_map(|b| {
+            place(b, cat, false, 1.0).map(|p| {
+                (
+                    b.name.clone(),
+                    p.y,
+                    p.ports
+                        .iter()
+                        .zip(p.dirs.iter())
+                        .zip(p.port_h.iter())
+                        .map(|((pt, d), h)| (pt.0, pt.1, d.0, d.1, *h))
+                        .collect(),
+                )
+            })
+        })
+        .collect()
 }
 
 pub fn compile_track(
@@ -809,6 +882,11 @@ fn compile_inner(
     report.blocks_chained = ch.seq.len();
     report.finish_found = ch.finished;
     report.bridged_gaps = ch.gaps;
+    report.chain = ch
+        .seq
+        .iter()
+        .map(|&(pi, a, b)| format!("{} {}>{} h {:.0}", pieces[pi].name, a, b, pieces[pi].y))
+        .collect();
     anyhow::ensure!(!ch.seq.is_empty(), "could not chain any piece");
     report.start_found = matches!(
         pieces[ch.seq[0].0].marker,

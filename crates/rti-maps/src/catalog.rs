@@ -83,7 +83,25 @@ pub struct CatalogFile {
     pub ignore_tokens: Vec<String>,
 }
 
+/// Mined per-port height offsets (see `data/heights.toml`).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct HeightsFile {
+    #[serde(default)]
+    pub piece: Vec<HeightEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HeightEntry {
+    pub name: String,
+    /// [port, median offset m, n]
+    pub ports: Vec<(usize, f32, usize)>,
+}
+
+pub const HEIGHTS_TOML: &str = include_str!("../data/heights.toml");
+
 pub struct Catalog {
+    /// name -> port -> offset (metres) of the neighbouring base relative to this base
+    pub heights: std::collections::HashMap<String, Vec<(usize, f32)>>,
     pub overrides: Vec<(Regex, Template)>,
     pub surfaces: Vec<(String, Surface)>,
     pub ignore_tokens: Vec<String>,
@@ -92,6 +110,8 @@ pub struct Catalog {
 /// Resolved geometry for one block name.
 #[derive(Clone, Debug)]
 pub struct Resolved {
+    /// mined port height offsets for this block name, if known: (port, metres)
+    pub port_offsets: Vec<(usize, f32)>,
     pub template: Template,
     pub surface: Surface,
     pub family: String,
@@ -189,7 +209,16 @@ impl Catalog {
                 .map_err(|e| anyhow::anyhow!("bad catalog pattern {:?}: {e}", t.pattern))?;
             overrides.push((re, t));
         }
+        let heights_file: HeightsFile = toml::from_str(HEIGHTS_TOML).unwrap_or_default();
+        let mut heights = std::collections::HashMap::new();
+        for e in heights_file.piece {
+            heights.insert(
+                e.name,
+                e.ports.iter().map(|(k, off, _)| (*k, *off)).collect(),
+            );
+        }
         Ok(Catalog {
+            heights,
             overrides,
             surfaces: file.surfaces,
             ignore_tokens: file.ignore_tokens,
@@ -229,9 +258,11 @@ impl Catalog {
     pub fn resolve(&self, name: &str) -> Option<Resolved> {
         for (re, t) in &self.overrides {
             if re.is_match(name) {
+                let _ = &self.heights;
                 let toks = tokens(name);
                 let surface = t.surface.unwrap_or_else(|| self.surface_for_tokens(&toks));
                 return Some(Resolved {
+                    port_offsets: vec![],
                     template: t.clone(),
                     surface,
                     family: toks.first().cloned().unwrap_or_default(),
@@ -243,6 +274,13 @@ impl Catalog {
     }
 
     fn resolve_grammar(&self, name: &str) -> Option<Resolved> {
+        self.resolve_grammar_inner(name).map(|mut r| {
+            r.port_offsets = self.heights.get(name).cloned().unwrap_or_default();
+            r
+        })
+    }
+
+    fn resolve_grammar_inner(&self, name: &str) -> Option<Resolved> {
         let toks = tokens(name);
         if toks.is_empty() {
             return None;
@@ -329,6 +367,7 @@ impl Catalog {
             t.marker = Some(m);
             t.len = len_hint.unwrap_or(1);
             return Some(Resolved {
+                port_offsets: vec![],
                 template: t,
                 surface,
                 family,
@@ -342,6 +381,7 @@ impl Catalog {
                 t.shape = Shape::Curve;
                 t.size = n.clamp(1, 6);
                 return Some(Resolved {
+                    port_offsets: vec![],
                     template: t,
                     surface,
                     family,
@@ -354,6 +394,7 @@ impl Catalog {
             t.shape = Shape::Curve;
             t.size = 1;
             return Some(Resolved {
+                port_offsets: vec![],
                 template: t,
                 surface,
                 family,
@@ -365,6 +406,7 @@ impl Catalog {
             t.len = len_hint.unwrap_or(2).max(2);
             t.shift = if has("Left") { 1 } else { -1 };
             return Some(Resolved {
+                port_offsets: vec![],
                 template: t,
                 surface,
                 family,
@@ -375,6 +417,7 @@ impl Catalog {
         if has("Branch") || has("Cross") {
             t.shape = Shape::Open;
             return Some(Resolved {
+                port_offsets: vec![],
                 template: t,
                 surface,
                 family,
@@ -394,6 +437,7 @@ impl Catalog {
             t.size = a.max(1);
             t.len = b.max(1);
             return Some(Resolved {
+                port_offsets: vec![],
                 template: t,
                 surface,
                 family,
@@ -424,6 +468,7 @@ impl Catalog {
             t.shape = Shape::Straight;
             t.len = len_hint.unwrap_or(1);
             return Some(Resolved {
+                port_offsets: vec![],
                 template: t,
                 surface,
                 family,
