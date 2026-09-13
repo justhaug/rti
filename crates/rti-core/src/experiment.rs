@@ -153,6 +153,15 @@ pub enum ExperimentSpec {
         #[serde(default)]
         name: Option<String>,
     },
+    /// Import a TM2020 replay (.Replay.Gbx): registers the embedded map as a
+    /// track (if not present) and the player's inputs as a human trajectory.
+    ImportReplay {
+        /// Path to a .Replay.Gbx (e.g. the game's Autosaves folder).
+        source: String,
+        /// Track name (defaults to a slug of the map name).
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// Procedurally generate and register a new track.
     GenerateTrack {
         name: String,
@@ -199,6 +208,7 @@ impl ExperimentSpec {
             ExperimentSpec::Benchmark { .. } => "benchmark",
             ExperimentSpec::GenerateTrack { .. } => "generate_track",
             ExperimentSpec::ImportMap { .. } => "import_map",
+            ExperimentSpec::ImportReplay { .. } => "import_replay",
         }
     }
 
@@ -221,6 +231,7 @@ impl ExperimentSpec {
 - {"kind":"train_bc","tracks":[<name>...],"top_k":<int>,"epochs":<int>,"hidden":<int>,"seed":<int>,"value_head":<bool>}
 - {"kind":"benchmark","ticks":<int>}
 - {"kind":"generate_track","name":<str>,"seed":<int>,"segments":<int>,"half_width":<float>}
-- {"kind":"import_map","source":<TMX id | TMX URL | path to .Map.Gbx>,"name":<track name|null>}  (downloads a real map from trackmania.exchange and compiles it; the compile report says how much of the map was understood)"#
+- {"kind":"import_map","source":<TMX id | TMX URL | path to .Map.Gbx>,"name":<track name|null>}  (downloads a real map from trackmania.exchange and compiles it; the compile report says how much of the map was understood)
+- {"kind":"import_replay","source":<path to .Replay.Gbx>,"name":<track name|null>}  (a human run from the real game: registers its map and the exact per-tick inputs as a trajectory with world "human:<login>"; use its hash as warm_start)"#
     }
 }

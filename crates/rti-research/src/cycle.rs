@@ -129,6 +129,12 @@ pub fn validate_spec(s: &Session, spec: &mut ExperimentSpec) -> anyhow::Result<(
         ExperimentSpec::ImportMap { source, .. } => {
             anyhow::ensure!(!source.trim().is_empty(), "import_map needs a source");
         }
+        ExperimentSpec::ImportReplay { source, .. } => {
+            anyhow::ensure!(
+                std::path::Path::new(source).is_file(),
+                "import_replay: {source:?} is not a file"
+            );
+        }
     }
     Ok(())
 }

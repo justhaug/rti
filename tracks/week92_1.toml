@@ -1,0 +1,25 @@
+name = "week92_1"
+description = 'Imported from TM2020 map "1 - $A50Pyroclastic $E97Flow" by  (15035 blocks, 1 chained, convention origin_cell=true yaw_sign=1)'
+checkpoints = []
+max_ticks = 12000
+tm_map_uid = "k78DsSx9_dsvI0T9UMvEoJsEwTc"
+tm_map_file = "RTI/week92_1.Map.Gbx"
+walls = true
+
+[[nodes]]
+x = 1104.0
+y = 992.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1104.0
+y = 1008.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1104.0
+y = 1024.0
+half_width = 8.0
+surface = "asphalt"

@@ -450,6 +450,7 @@ impl Archive {
             ExperimentSpec::TrainBc { tracks, .. } => (Some("bc".into()), tracks.first().cloned()),
             ExperimentSpec::GenerateTrack { name, .. } => (None, Some(name.clone())),
             ExperimentSpec::ImportMap { name, .. } => (None, name.clone()),
+            ExperimentSpec::ImportReplay { name, .. } => (Some("replay".into()), name.clone()),
             ExperimentSpec::Verify { .. } | ExperimentSpec::Benchmark { .. } => (None, None),
         };
         self.conn.execute(

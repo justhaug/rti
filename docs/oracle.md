@@ -79,3 +79,23 @@ server implementation against the hidden sim — a good reference while writing 
 Every oracle run is recorded in the ledger as `oracle_ticks`. The real game runs at 100 ticks/s
 (10 ms per tick); the hidden sim reports 0.2 µs/tick. The research loop uses
 `Oracle::ms_per_tick` to decide when verification is worth it.
+
+## Replays: the human input channel that needs no plugin
+
+TM2020 autosaves a `.Replay.Gbx` for every personal best in
+`Documents/Trackmania/Replays/Autosaves` (inside the Proton prefix). Those replays contain the
+full map and the player's **exact per-tick inputs** (no position samples: the game regenerates
+the ghost deterministically). `rti replay import <file>` decodes them (`rti-maps/src/replay.rs`,
+format after GBX.NET) and registers the map as a track and the inputs as a trajectory in world
+`human:<login>` with the real race time. `rti replay watch --every 10` (and the server loop)
+import new autosaves automatically, so driving in the game feeds RTI without Openplanet.
+
+What this gives the research loop today:
+
+* human lines as `warm_start` for local optimisation and CEM;
+* a free sim-vs-reality probe: replaying the human inputs in the simulator and comparing the
+  finish time and checkpoint splits with the replay's (the summary prints both);
+* the map file itself, without TMX.
+
+What it does not give: RTI's own inputs played back in the game (still needs a TAS-style tool),
+and per-tick positions (would need the Openplanet bridge in developer mode, i.e. Club access).

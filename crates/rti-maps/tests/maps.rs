@@ -109,3 +109,87 @@ fn compiles_synthetic_chain() {
         track.length()
     );
 }
+
+/// Bit-exact input decoding against a hand-built TM2020 input stream:
+/// tick 0 sets the vehicle state word (kind 2), tick 3 presses accelerate,
+/// tick 5 steers left, everything else "same".
+#[test]
+fn decodes_synthetic_input_stream() {
+    use rti_maps::replay::{decode_inputs, inputs_to_actions, InputEvent};
+    let mut bits: Vec<u8> = vec![];
+    let mut push = |v: u64, n: usize| {
+        for i in 0..n {
+            bits.push(((v >> i) & 1) as u8);
+        }
+    };
+    // tick 0: sameState=0, only2Bit=0, states(34 bits)=2, sameMouse=1, sameVehicleValue=1
+    push(0, 1);
+    push(0, 1);
+    push(2, 34);
+    push(1, 1);
+    push(1, 1);
+    // ticks 1,2: same everything (sameState=1, sameMouse=1, sameVehicleValue=1)
+    for _ in 0..2 {
+        push(1, 1);
+        push(1, 1);
+        push(1, 1);
+    }
+    // tick 3: same state, same mouse, vehicle value: steer 0, accel 1, brake 0
+    push(1, 1);
+    push(1, 1);
+    push(0, 1);
+    push(0, 8);
+    push(1, 1);
+    push(0, 1);
+    // tick 4: same
+    push(1, 1);
+    push(1, 1);
+    push(1, 1);
+    // tick 5: steer -127 (0x81), accel 1, brake 0
+    push(1, 1);
+    push(1, 1);
+    push(0, 1);
+    push(0x81, 8);
+    push(1, 1);
+    push(0, 1);
+    let mut data = vec![0u8; bits.len().div_ceil(8)];
+    for (i, b) in bits.iter().enumerate() {
+        data[i / 8] |= b << (i % 8);
+    }
+    let (events, warnings) = decode_inputs(&data, 6, 12, 0);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(events[0].event, InputEvent::States { value: 2 });
+    assert_eq!(
+        events[1],
+        rti_maps::replay::TimedInput {
+            time_ms: 30,
+            event: InputEvent::Accelerate { on: true }
+        }
+    );
+    assert_eq!(
+        events[2],
+        rti_maps::replay::TimedInput {
+            time_ms: 50,
+            event: InputEvent::Steer { value: -127 }
+        }
+    );
+    let acts = inputs_to_actions(&events, 6);
+    assert!(!acts[2].gas && acts[3].gas && acts[5].gas);
+    assert!((acts[5].steer + 1.0).abs() < 1e-6 && acts[4].steer == 0.0);
+}
+
+#[test]
+fn parses_real_replay_when_available() {
+    let Ok(p) = std::env::var("RTI_TEST_REPLAY") else {
+        return;
+    };
+    let r = rti_maps::parse_replay(&std::fs::read(p).unwrap()).unwrap();
+    assert!(!r.ghosts.is_empty());
+    let g = &r.ghosts[0];
+    assert!(
+        g.race_time_ms > 0 && g.ticks > 0 && !g.inputs.is_empty(),
+        "{g:?}"
+    );
+    assert!(g.warnings.is_empty(), "{:?}", g.warnings);
+    assert!(r.map.is_some(), "{:?}", r.warnings);
+}

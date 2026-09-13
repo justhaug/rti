@@ -108,7 +108,8 @@ pub fn parse_map(data: &[u8]) -> anyhow::Result<ParsedMap> {
     if version >= 6 {
         let user_data_size = r.u32()? as usize;
         let start = r.pos;
-        let n = r.u32()?;
+        // embedded maps (inside replays) carry no header chunks at all
+        let n = if user_data_size == 0 { 0 } else { r.u32()? };
         let mut entries = vec![];
         for _ in 0..n {
             let id = r.u32()?;

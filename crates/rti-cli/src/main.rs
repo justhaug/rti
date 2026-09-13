@@ -117,6 +117,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CloudCmd,
     },
+    /// Human runs from the real game (.Replay.Gbx): inspect, import, watch the Autosaves folder.
+    Replay {
+        #[command(subcommand)]
+        cmd: ReplayCmd,
+    },
     /// Videos: detect interesting verified results, render, review, publish.
     Media {
         #[command(subcommand)]
@@ -147,6 +152,26 @@ enum TrackCmd {
         seed: u64,
         #[arg(long, default_value_t = 8)]
         segments: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReplayCmd {
+    /// Decode a replay and print map, times and inputs (no archive changes).
+    Inspect { file: PathBuf },
+    /// Import a replay: map → track, inputs → human trajectory.
+    Import {
+        file: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Import every new replay in the game's Autosaves folder (or --dir), once or continuously.
+    Watch {
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Poll interval in seconds (0 = run once).
+        #[arg(long, default_value_t = 0)]
+        every: u64,
     },
 }
 
@@ -737,6 +762,50 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Cmd::Replay { cmd } => match cmd {
+            ReplayCmd::Inspect { file } => {
+                let r = rti_maps::parse_replay(&std::fs::read(&file)?)?;
+                println!(
+                    "map {:?} uid {} player {:?} ({}) time {} ms warnings {:?}",
+                    r.map_name, r.map_uid, r.player_nickname, r.player_login, r.time_ms, r.warnings
+                );
+                for g in &r.ghosts {
+                    println!("ghost {} race {} ms checkpoints {:?} respawns {} inputs v{} ticks {} events {} warnings {:?}", g.login, g.race_time_ms, g.checkpoint_times_ms, g.respawns, g.input_version, g.ticks, g.inputs.len(), g.warnings);
+                    for e in &g.inputs {
+                        println!("  {:6} ms {:?}", e.time_ms, e.event);
+                    }
+                }
+            }
+            ReplayCmd::Import { file, name } => {
+                let s = Session::open(&root)?;
+                let r = run_spec(
+                    &s,
+                    ExperimentSpec::ImportReplay {
+                        source: file.display().to_string(),
+                        name,
+                    },
+                )?;
+                println!("{}", r.summary);
+            }
+            ReplayCmd::Watch { dir, every } => {
+                let s = Session::open(&root)?;
+                let dir = dir.unwrap_or_else(|| PathBuf::from(&s.cfg.oracle.tm2020_replays_dir));
+                anyhow::ensure!(
+                    dir.is_dir(),
+                    "replay directory {} not found; set [oracle] tm2020_replays_dir",
+                    dir.display()
+                );
+                loop {
+                    for line in rti_research::runner::import_replay_dir(&s, &dir)? {
+                        println!("{line}");
+                    }
+                    if every == 0 {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(every));
+                }
+            }
+        },
         Cmd::Media { cmd } => {
             let s = Session::open(&root)?;
             match cmd {

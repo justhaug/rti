@@ -15,10 +15,13 @@
 
 pub mod catalog;
 pub mod compile;
+pub mod container;
 pub mod gbx;
 pub mod reader;
+pub mod replay;
 pub mod tmx;
 
 pub use compile::{compile_track, CompileReport};
 pub use gbx::{parse_map, MapBlock, MapInfo, MapItem, ParsedMap};
+pub use replay::{parse_replay, ParsedReplay};
 pub use tmx::{TmxClient, TmxMap};

@@ -5,3 +5,4 @@
 *.duckdb.wal
 .env
 __pycache__/
+rti.toml

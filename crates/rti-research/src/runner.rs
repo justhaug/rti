@@ -99,7 +99,209 @@ pub fn run_experiment(
             half_width,
         } => run_generate_track(s, name, *seed, *segments, *half_width),
         ExperimentSpec::ImportMap { source, name } => run_import_map(s, source, name.as_deref()),
+        ExperimentSpec::ImportReplay { source, name } => {
+            run_import_replay(s, source, name.as_deref())
+        }
     }
+}
+
+/// Import a .Replay.Gbx: the embedded map becomes a track (compiled with the
+/// catalog; coverage may be partial), the player's inputs become a
+/// trajectory in world `human:<login>` with the real race time.
+pub fn run_import_replay(
+    s: &Session,
+    source: &str,
+    name: Option<&str>,
+) -> anyhow::Result<ExperimentReport> {
+    use rti_maps::catalog::Catalog;
+    let timer = CostTimer::start();
+    let bytes = std::fs::read(source)?;
+    let replay = rti_maps::parse_replay(&bytes)?;
+    let ghost = replay
+        .ghosts
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("replay has no ghost"))?;
+    anyhow::ensure!(
+        !ghost.inputs.is_empty(),
+        "replay ghost has no decoded inputs ({:?})",
+        ghost.warnings
+    );
+    let map = replay
+        .map
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("replay has no embedded map ({:?})", replay.warnings))?;
+    // track: reuse an existing track for this map uid, else compile
+    let existing = s
+        .archive
+        .maps(10_000)?
+        .into_iter()
+        .find(|m| m.map_uid == map.info.uid && !m.track_name.is_empty());
+    let (track, report) = match &existing {
+        Some(m) => (s.track(&m.track_name)?, None),
+        None => {
+            let track_name = match name {
+                Some(n) => slugify(n),
+                None => slugify(&map.info.name),
+            };
+            let cat = Catalog::load(&s.root)?;
+            let (track, report) = rti_maps::compile_track(map, &cat, &track_name)?;
+            rti_maps::catalog::write_track(&s.cfg.tracks_dir, &track)?;
+            s.archive.upsert_track(&track)?;
+            let gbx_hash = s.archive.cas.put_bytes(&replay.map_bytes)?;
+            let maps_dir = std::path::Path::new(&s.cfg.oracle.tm2020_maps_dir);
+            if !s.cfg.oracle.tm2020_maps_dir.is_empty() && maps_dir.is_dir() {
+                std::fs::create_dir_all(maps_dir.join("RTI"))?;
+                std::fs::write(
+                    maps_dir.join("RTI").join(format!("{track_name}.Map.Gbx")),
+                    &replay.map_bytes,
+                )?;
+            }
+            s.archive.insert_map(&rti_archive::rows::MapRow {
+                hash: map.source_hash.clone(),
+                tmx_id: None,
+                map_uid: map.info.uid.clone(),
+                map_name: map.info.name.clone(),
+                author: map.info.author.clone(),
+                track_name: track_name.clone(),
+                author_ms: Some(map.info.author_ms as i64),
+                wr_ms: None,
+                gbx_hash: Some(gbx_hash.0),
+                parsed_hash: None,
+                tmx: None,
+                report: Some(serde_json::to_value(&report)?),
+                created_at: String::new(),
+            })?;
+            (track, Some(report))
+        }
+    };
+    let replay_hash = s.archive.cas.put_bytes(&bytes)?;
+    let actions = rti_maps::replay::inputs_to_actions(&ghost.inputs, ghost.ticks);
+    let login = if ghost.login.is_empty() {
+        replay.player_login.clone()
+    } else {
+        ghost.login.clone()
+    };
+    let traj = Trajectory {
+        track_hash: track.hash(),
+        track_name: track.name.clone(),
+        world: format!("human:{login}"),
+        actions,
+        states: vec![],
+        result: rti_core::RunResult {
+            finished: true,
+            time_ms: ghost.race_time_ms,
+            ticks: ghost.ticks,
+            checkpoints_hit: ghost.checkpoint_times_ms.len() as u32,
+            progress: track.length(),
+            ..Default::default()
+        },
+        method: "replay".into(),
+        parent: None,
+    };
+    let thash = s.archive.insert_trajectory(&traj, None)?;
+    // how does our sim do with the human's inputs? (a free sim/reality probe)
+    let (sim, _) = s.sim(&track, None)?;
+    let ro = rollout(
+        &sim,
+        &sim.initial_state(),
+        &traj.actions,
+        track.max_ticks,
+        false,
+    );
+    let cost = timer.finish(ro.ticks);
+    let summary = format!(
+        "imported replay of {:?} by {} ({}): {} ms, {} checkpoints, {} input events over {} ticks → trajectory {} on track {}{}; our sim replaying those inputs: {} ({:.0}/{:.0} m, {} ms)",
+        replay.map_name,
+        replay.player_nickname,
+        login,
+        ghost.race_time_ms,
+        ghost.checkpoint_times_ms.len(),
+        ghost.inputs.len(),
+        ghost.ticks,
+        thash.short(),
+        track.name,
+        report.as_ref().map(|r| format!(" (compiled: {}/{} blocks chained, finish={})", r.blocks_chained, r.blocks_recognized, r.finish_found)).unwrap_or_default(),
+        if ro.result.finished { "finished" } else { "DNF" },
+        ro.result.progress,
+        track.length(),
+        ro.result.time_ms
+    );
+    Ok(ExperimentReport {
+        result: serde_json::json!({
+            "track": track.name,
+            "trajectory": thash,
+            "replay_hash": replay_hash,
+            "map_uid": map.info.uid,
+            "player": replay.player_nickname,
+            "login": login,
+            "race_time_ms": ghost.race_time_ms,
+            "checkpoint_times_ms": ghost.checkpoint_times_ms,
+            "input_events": ghost.inputs.len(),
+            "ticks": ghost.ticks,
+            "compile": report,
+            "sim_replay": ro.result,
+            "warnings": replay.warnings,
+        }),
+        summary,
+        cost,
+        trajectories: vec![thash],
+        models: vec![],
+        improvement_ms: 0.0,
+        improvement_verified: false,
+        divergence_before: None,
+        divergence_after: None,
+        novelty: 0.5,
+    })
+}
+
+/// Import every new replay in a directory (e.g. the game's Autosaves).
+/// Returns summaries of the imports performed; already-imported files
+/// (by content hash) are skipped.
+pub fn import_replay_dir(s: &Session, dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let mut out = vec![];
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    let mut files: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.to_string_lossy().ends_with(".Replay.Gbx"))
+        .collect();
+    files.sort();
+    for f in files {
+        let bytes = std::fs::read(&f)?;
+        let h = rti_core::ContentHash::of_bytes(&bytes);
+        if s.archive.cas.exists(&h) {
+            continue;
+        }
+        let spec = ExperimentSpec::ImportReplay {
+            source: f.display().to_string(),
+            name: None,
+        };
+        let id = s
+            .archive
+            .begin_experiment(&spec, None, None, &rti_core::Provenance::now())?;
+        match run_import_replay(s, &f.display().to_string(), None) {
+            Ok(r) => {
+                s.archive
+                    .finish_experiment(&id, "done", &r.result, &r.cost, None, None, &r.summary)?;
+                out.push(r.summary);
+            }
+            Err(e) => {
+                s.archive.finish_experiment(
+                    &id,
+                    "failed",
+                    &serde_json::json!({"error": e.to_string()}),
+                    &Default::default(),
+                    None,
+                    None,
+                    &format!("failed: {e}"),
+                )?;
+                out.push(format!("{}: failed: {e}", f.display()));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Slug for track names derived from map names (strips TM `$xxx` codes).

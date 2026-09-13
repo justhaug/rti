@@ -128,6 +128,17 @@ impl AppState {
     /// session lock for the duration.
     pub fn cycle_once(self: &Arc<Self>) -> anyhow::Result<serde_json::Value> {
         let s = self.session.lock().unwrap();
+        let rdir = std::path::PathBuf::from(&s.cfg.oracle.tm2020_replays_dir);
+        if rdir.is_dir() {
+            match rti_research::runner::import_replay_dir(&s, &rdir) {
+                Ok(lines) => {
+                    for l in lines {
+                        self.push_event("replay", &l);
+                    }
+                }
+                Err(e) => self.push_event("error", &format!("replay import failed: {e:#}")),
+            }
+        }
         let r = match rti_research::run_cycle(&s) {
             Ok(r) => r,
             Err(e) => {
