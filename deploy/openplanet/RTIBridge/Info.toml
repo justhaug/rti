@@ -1,0 +1,10 @@
+[meta]
+name = "RTI Bridge"
+author = "RTI"
+category = "Utility"
+version = "0.1.0"
+blurb = "TCP bridge for Recursive Trackmania Intelligence: map loading, telemetry, verification hooks. Protocol: docs/oracle.md"
+site = "https://github.com/justhaug/rti"
+
+[script]
+timeout = 0

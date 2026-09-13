@@ -60,6 +60,10 @@ pub struct Track {
     /// Optional TM2020 map identifier (UID) for oracle verification.
     #[serde(default)]
     pub tm_map_uid: Option<String>,
+    /// Map file path relative to the game's Maps folder, for the bridge's
+    /// `load_map` (e.g. "RTI/tmx356566.Map.Gbx").
+    #[serde(default)]
+    pub tm_map_file: Option<String>,
     /// Transform from TM2020 world coordinates to this track's 2D frame
     /// (see docs/oracle.md). Only needed for real-game verification.
     #[serde(default)]
@@ -197,6 +201,7 @@ impl Track {
             finish: None,
             max_ticks: default_max_ticks(),
             tm_map_uid: None,
+            tm_map_file: None,
             tm_frame: None,
             walls: true,
         }

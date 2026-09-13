@@ -173,6 +173,13 @@ pub fn run_import_map(
     let (track, report) = rti_maps::compile_track(&parsed, &cat, &track_name)?;
     let gbx_hash = s.archive.cas.put_bytes(&gbx)?;
     let parsed_hash = s.archive.cas.put_json(&parsed)?;
+    // make the map loadable by the game bridge
+    let maps_dir = std::path::Path::new(&s.cfg.oracle.tm2020_maps_dir);
+    if !s.cfg.oracle.tm2020_maps_dir.is_empty() && maps_dir.is_dir() {
+        let dst = maps_dir.join("RTI");
+        std::fs::create_dir_all(&dst)?;
+        std::fs::write(dst.join(format!("{track_name}.Map.Gbx")), &gbx)?;
+    }
     rti_maps::catalog::write_track(&s.cfg.tracks_dir, &track)?;
     let thash = s.archive.upsert_track(&track)?;
     let row = rti_archive::rows::MapRow {

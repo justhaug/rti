@@ -429,6 +429,7 @@ pub fn compile_track(
         finish,
         max_ticks: 12_000,
         tm_map_uid: Some(map.info.uid.clone()),
+        tm_map_file: Some(format!("RTI/{name}.Map.Gbx")),
         tm_frame: None,
         walls: true,
     };

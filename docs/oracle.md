@@ -28,12 +28,21 @@ RTI is the TCP **client**. The game side is a plugin (Openplanet, running in TM2
 Proton) that listens on `[oracle] tm2020_host:tm2020_port` (default `127.0.0.1:27015`) and
 speaks newline-delimited JSON. Every request gets exactly one response line.
 
+A reference plugin lives in `deploy/openplanet/RTIBridge/` (`deploy/tm2020-local.sh` installs it
+into the prefix). It implements `hello`, `ping`, `state`, `load_map` (by file in the game's Maps
+folder) and `capture` (telemetry of whatever is driving). It does **not** implement `run`:
+Openplanet has no supported input injection, so replaying RTI's inputs in the game needs a
+TAS/TMInterface-style tool. Until then, verification against the real game is capture-based
+(drive or ghost-play the line, compare telemetry), and `Tm2020::run` returns the bridge's error.
+
 Requests (`crates/rti-oracle/src/protocol.rs`):
 
 ```jsonc
 {"cmd":"hello","protocol":1}
 {"cmd":"ping"}
-{"cmd":"load_map","uid":"<map uid>"}          // or a path, if the plugin supports it
+{"cmd":"load_map","uid":"<map uid>","file":"RTI/<track>.Map.Gbx"}   // file relative to the Maps folder
+{"cmd":"state"}                                                       // current car state
+{"cmd":"capture","max_ticks":6000}                                    // telemetry of the current drive
 {"cmd":"run","inputs":[{"action":{"steer":-0.5,"gas":true,"brake":false},"ticks":120}, ...],
  "max_ticks":12000,"telemetry":true}
 ```

@@ -112,6 +112,45 @@ pub fn project_states(track: &Track, states: &[TmState]) -> Vec<CarState> {
     out
 }
 
+impl Tm2020 {
+    /// Bridge capabilities string from `hello` (e.g. "hello,ping,state,load_map,capture").
+    pub fn capabilities(&self) -> anyhow::Result<String> {
+        let mut c = self.connect()?;
+        let r = c.call(&Request::Hello {
+            protocol: PROTOCOL_VERSION,
+        })?;
+        Ok(r.capabilities.unwrap_or_default())
+    }
+
+    /// Current car state as reported by the game (raw JSON).
+    pub fn state(&self) -> anyhow::Result<serde_json::Value> {
+        let mut c = self.connect()?;
+        let r = c.call(&Request::State)?;
+        Ok(r.state.unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Capture telemetry of whatever is driving for up to `max_ticks` ticks.
+    pub fn capture(&self, track: &Track, max_ticks: u32) -> anyhow::Result<OracleRun> {
+        let mut c = self.connect()?;
+        let resp = c.call(&Request::Capture { max_ticks })?;
+        let r = resp.result.unwrap_or_default();
+        let states = project_states(track, &resp.states);
+        let progress = states.last().map(|s| s.progress).unwrap_or(0.0);
+        Ok(OracleRun {
+            result: RunResult {
+                finished: r.finished,
+                time_ms: r.race_time_ms,
+                ticks: r.ticks,
+                checkpoints_hit: r.checkpoints,
+                progress,
+                ..Default::default()
+            },
+            states,
+            ticks: r.ticks as u64,
+        })
+    }
+}
+
 impl Oracle for Tm2020 {
     fn name(&self) -> String {
         "tm2020".into()
@@ -131,7 +170,10 @@ impl Oracle for Tm2020 {
             )
         })?;
         let mut c = self.connect()?;
-        c.call(&Request::LoadMap { uid })?;
+        c.call(&Request::LoadMap {
+            uid,
+            file: track.tm_map_file.clone().unwrap_or_default(),
+        })?;
         let resp = c.call(&Request::Run {
             inputs: compress_actions(actions),
             max_ticks,

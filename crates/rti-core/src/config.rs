@@ -186,6 +186,10 @@ pub struct OracleConfig {
     pub tm2020_host: String,
     pub tm2020_port: u16,
     pub tm2020_timeout_secs: u64,
+    /// The game's Maps folder (inside the Proton prefix on Linux). Imported
+    /// maps are copied to `<maps_dir>/RTI/<track>.Map.Gbx` so the bridge can
+    /// load them by file. Empty = don't copy.
+    pub tm2020_maps_dir: String,
     /// Divergence (mean position error, m) above which sim improvement is
     /// queued as a research task.
     pub disagreement_threshold_m: f32,
@@ -199,8 +203,19 @@ impl Default for OracleConfig {
             tm2020_host: "127.0.0.1".into(),
             tm2020_port: 27015,
             tm2020_timeout_secs: 120,
+            tm2020_maps_dir: default_maps_dir(),
             disagreement_threshold_m: 2.0,
         }
+    }
+}
+
+fn default_maps_dir() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let p = format!("{home}/.steam/root/steamapps/compatdata/2225070/pfx/drive_c/users/steamuser/Documents/Trackmania/Maps");
+    if std::path::Path::new(&p).is_dir() {
+        p
+    } else {
+        String::new()
     }
 }
 

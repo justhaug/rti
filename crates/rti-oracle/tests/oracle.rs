@@ -78,6 +78,11 @@ fn tm2020_client_roundtrip_with_mock_bridge() {
                         ..Response::ok()
                     },
                     Request::Ping | Request::LoadMap { .. } => Response::ok(),
+                    Request::State => Response {
+                        state: Some(serde_json::json!({"available": false})),
+                        ..Response::ok()
+                    },
+                    Request::Capture { .. } => Response::err("capture not supported by the mock"),
                     Request::Run {
                         inputs, max_ticks, ..
                     } => {

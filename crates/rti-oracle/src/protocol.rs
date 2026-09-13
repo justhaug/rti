@@ -12,9 +12,18 @@ pub enum Request {
     Hello {
         protocol: u32,
     },
-    /// Load a map by UID (or file path if the plugin supports it).
+    /// Load a map: `file` is a path relative to the game's Maps folder (the
+    /// bridge cannot resolve UIDs offline); `uid` is informational.
     LoadMap {
         uid: String,
+        #[serde(default)]
+        file: String,
+    },
+    /// Current car state (milestone zero: can we read the car?).
+    State,
+    /// Stream telemetry of whatever is driving for `max_ticks` ticks.
+    Capture {
+        max_ticks: u32,
     },
     /// Reset to the start line, replay the given inputs, return telemetry.
     Run {
@@ -66,6 +75,10 @@ pub struct Response {
     pub result: Option<TmResult>,
     #[serde(default)]
     pub states: Vec<TmState>,
+    #[serde(default)]
+    pub state: Option<serde_json::Value>,
+    #[serde(default)]
+    pub capabilities: Option<String>,
 }
 
 impl Response {
@@ -77,6 +90,8 @@ impl Response {
             game: None,
             result: None,
             states: vec![],
+            state: None,
+            capabilities: None,
         }
     }
     pub fn err(msg: impl Into<String>) -> Response {
@@ -87,6 +102,8 @@ impl Response {
             game: None,
             result: None,
             states: vec![],
+            state: None,
+            capabilities: None,
         }
     }
 }
