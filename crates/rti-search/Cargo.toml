@@ -6,6 +6,12 @@ license.workspace = true
 
 [dependencies]
 rti-core.workspace = true
+rti-sim.workspace = true
+rti-nn.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rayon.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+tracing.workspace = true

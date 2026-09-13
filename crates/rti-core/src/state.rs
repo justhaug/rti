@@ -30,6 +30,8 @@ pub struct CarState {
     pub wall_hits: u32,
     /// Centerline segment the car was last located on (search hint).
     pub seg: u32,
+    /// Consecutive ticks with negligible speed (stuck detection).
+    pub stuck_ticks: u32,
 }
 
 impl CarState {

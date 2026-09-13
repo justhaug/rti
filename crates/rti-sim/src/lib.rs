@@ -18,4 +18,4 @@ pub mod tracks;
 pub use geom::TrackGeom;
 pub use observe::{observe, OBS_DIM};
 pub use physics::{Ext, Sim};
-pub use rollout::{rollout, rollout_batch, Rollout};
+pub use rollout::{rollout, rollout_batch, rollout_with, Rollout};

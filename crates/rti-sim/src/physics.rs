@@ -31,6 +31,10 @@ impl Ext {
     };
 }
 
+/// A run is declared stuck (terminal) after this many consecutive
+/// near-stationary ticks.
+pub const STUCK_TICKS: u32 = 200;
+
 /// A simulator instance: physics params + compiled track. Cheap to clone.
 #[derive(Clone, Debug)]
 pub struct Sim {
@@ -123,16 +127,7 @@ impl Sim {
             a_max *= 1.0 / (1.0 + 0.004 * (speed - p.slip_onset));
         }
 
-        // --- yaw from kinematic bicycle, limited by lateral grip ---
-        let delta = s.steer_pos * p.steer_max / (1.0 + vf.abs() / p.steer_speed_falloff);
-        let omega_des = vf * delta.tan() / p.wheelbase;
-        let omega_max = a_max / vf.abs().max(1.0);
-        let omega = omega_des.clamp(-omega_max, omega_max);
-        let a_lat_used = (omega * vf).abs();
-        s.yaw_rate = omega;
-        s.heading = wrap_angle(s.heading + omega * dt);
-
-        // --- longitudinal ---
+        // --- longitudinal demand first (brake priority in the friction circle) ---
         let mut engine = 0.0;
         if a.gas {
             engine = p.engine_accel * drive_mult * s.drive
@@ -144,38 +139,44 @@ impl Sim {
                 }
             }
         }
-        let mut brake = 0.0;
+        let moving = vf.abs() > 0.05;
+        let mut a_drive = engine;
         if a.brake {
-            brake = p.brake_decel * drive_mult;
+            if moving {
+                a_drive = engine - p.brake_decel * drive_mult * vf.signum();
+            } else {
+                a_drive = engine.min(0.0);
+            }
         }
-        // traction-limited longitudinal accel (remaining friction circle)
-        let a_long_avail = (a_max * a_max - a_lat_used * a_lat_used).max(0.0).sqrt();
-        let mut a_long = engine - brake * vf.signum() * (vf.abs() > 0.05) as u8 as f32;
-        if a.brake && vf.abs() <= 0.05 {
-            a_long = engine.min(0.0);
-        }
-        a_long = a_long.clamp(-a_long_avail, a_long_avail);
+        // traction-limited by the full friction circle
+        a_drive = a_drive.clamp(-a_max, a_max);
+        let lat_avail = (a_max * a_max - a_drive * a_drive).max(0.0).sqrt();
+
+        // --- yaw from kinematic bicycle, limited by remaining lateral grip ---
+        let delta = s.steer_pos * p.steer_max / (1.0 + vf.abs() / p.steer_speed_falloff);
+        let omega_des = vf * delta.tan() / p.wheelbase;
+        let omega_max = lat_avail / vf.abs().max(1.0);
+        let omega = omega_des.clamp(-omega_max, omega_max);
+        s.yaw_rate = omega;
+        s.heading = wrap_angle(s.heading + omega * dt);
+
         // drag and rolling resistance do not need traction
-        a_long -= p.drag * drag_mult * vf * vf.abs();
-        if vf.abs() > 0.05 {
+        let mut a_long = a_drive - p.drag * drag_mult * vf * vf.abs();
+        if moving {
             a_long -= p.rolling * vf.signum();
         }
         let mut vf2 = vf + a_long * dt;
-        if vf.abs() <= 0.05 && !a.gas && vf2.abs() < 0.05 {
+        if !moving && !a.gas && vf2.abs() < 0.05 {
             vf2 = 0.0;
         }
 
         // --- lateral: re-express old velocity in the new heading frame; tyres
         // pull lateral velocity toward zero with whatever grip is left ---
         let (ch2, sh2) = (s.heading.cos(), s.heading.sin());
-        // world velocity before lateral correction, using updated forward speed
         let wx = vf2 * ch - vl * sh;
         let wy = vf2 * sh + vl * ch;
         let vf3 = wx * ch2 + wy * sh2;
         let mut vl3 = -wx * sh2 + wy * ch2;
-        let lat_avail = (a_max * a_max - (a_long.min(a_long_avail)).powi(2))
-            .max(0.0)
-            .sqrt();
         let corr = vl3.clamp(-lat_avail * dt, lat_avail * dt);
         vl3 -= corr;
         vl3 *= p.slide_damping;
@@ -199,7 +200,8 @@ impl Sim {
         s.seg = loc2.seg as u32;
         let over = loc2.lateral.abs() - loc2.half_width;
         if self.geom.track.walls && over > 0.0 {
-            // push back inside and take the hit
+            // push back inside; kill the outward normal velocity; lose speed in
+            // proportion to how head-on the contact is, plus grinding friction
             let nx = -loc2.dir.sin();
             let ny = loc2.dir.cos();
             let sign = loc2.lateral.signum();
@@ -207,15 +209,24 @@ impl Sim {
             s.y -= ny * sign * over;
             let vn = s.vx * nx + s.vy * ny;
             if vn * sign > 0.0 {
-                // remove outward normal velocity, scale the rest
+                let speed = s.speed().max(1e-3);
+                let impact = vn.abs() / speed;
                 s.vx -= vn * nx;
                 s.vy -= vn * ny;
-                s.vx *= p.wall_restitution;
-                s.vy *= p.wall_restitution;
-                s.wall_hits += 1;
+                let keep = (1.0 - (1.0 - p.wall_restitution) * impact) * 0.995;
+                s.vx *= keep;
+                s.vy *= keep;
+                if impact > 0.1 {
+                    s.wall_hits += 1;
+                }
             }
         }
         s.progress = loc2.progress;
+        if s.tick > 150 && s.speed() < 1.0 {
+            s.stuck_ticks += 1;
+        } else {
+            s.stuck_ticks = 0;
+        }
 
         // --- checkpoints and finish ---
         let cps = &self.geom.checkpoint_dist;
@@ -234,7 +245,7 @@ impl Sim {
     /// open-edge track, or exceeded the tick limit.
     #[inline]
     pub fn is_terminal(&self, s: &CarState, max_ticks: u32) -> bool {
-        if s.finished || s.tick >= max_ticks {
+        if s.finished || s.tick >= max_ticks || s.stuck_ticks >= STUCK_TICKS {
             return true;
         }
         if !self.geom.track.walls {

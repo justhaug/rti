@@ -196,3 +196,25 @@ pub fn wrap_angle(a: f32) -> f32 {
     }
     a
 }
+
+impl TrackGeom {
+    /// Highest speed at centerline distance `d` from which every upcoming
+    /// corner within `lookahead` metres can still be taken, assuming
+    /// `lat_accel` of cornering grip and `brake_decel` of braking (both
+    /// already scaled by the surface). A physics-informed heuristic for
+    /// search, not a rule of the world.
+    pub fn safe_speed(&self, d: f32, lookahead: f32, lat_accel: f32, brake_decel: f32) -> f32 {
+        let mut vmax = f32::INFINITY;
+        let mut ahead = 2.0;
+        while ahead < lookahead {
+            let c = self.curvature_at(d + ahead).abs();
+            if c > 1e-4 {
+                let vc2 = lat_accel / c;
+                let vb = (vc2 + 2.0 * brake_decel * ahead).sqrt();
+                vmax = vmax.min(vb);
+            }
+            ahead += 4.0;
+        }
+        vmax
+    }
+}

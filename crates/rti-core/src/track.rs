@@ -60,6 +60,10 @@ pub struct Track {
     /// Optional TM2020 map identifier (UID) for oracle verification.
     #[serde(default)]
     pub tm_map_uid: Option<String>,
+    /// Transform from TM2020 world coordinates to this track's 2D frame
+    /// (see docs/oracle.md). Only needed for real-game verification.
+    #[serde(default)]
+    pub tm_frame: Option<TmFrame>,
     /// If true the track edge is a wall (car is clamped, loses speed).
     /// If false the car may leave the surface onto low-grip ground and is
     /// declared DNF beyond three half-widths.
@@ -69,6 +73,24 @@ pub struct Track {
 
 fn default_true() -> bool {
     true
+}
+
+/// Rigid transform mapping TM2020 world coordinates (x, y-up, z) onto the
+/// track's planar frame: `local = R(-yaw) * ((x, z) - origin_xz)`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct TmFrame {
+    pub origin: [f32; 3],
+    /// Rotation (radians) of the track's +x axis in the TM x/z plane.
+    pub yaw: f32,
+}
+
+impl TmFrame {
+    pub fn to_local(&self, p: [f32; 3]) -> (f32, f32) {
+        let dx = p[0] - self.origin[0];
+        let dz = p[2] - self.origin[2];
+        let (c, s) = (self.yaw.cos(), self.yaw.sin());
+        (c * dx + s * dz, -s * dx + c * dz)
+    }
 }
 
 fn default_max_ticks() -> u32 {
@@ -175,6 +197,7 @@ impl Track {
             finish: None,
             max_ticks: default_max_ticks(),
             tm_map_uid: None,
+            tm_frame: None,
             walls: true,
         }
     }

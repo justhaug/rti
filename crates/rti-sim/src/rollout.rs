@@ -12,10 +12,10 @@ pub struct Rollout {
     pub ticks: u64,
 }
 
-/// Run `actions` from `init`. Stops at finish / DNF / `max_ticks`. If the
-/// action list is shorter than the run, the last action is held. When
-/// `record` is set, every post-step state is kept (savestates for search
-/// and telemetry for oracle comparison).
+/// Run `actions` from `init`. Stops at finish / DNF / stuck / `max_ticks`,
+/// or when the action list is exhausted. When `record` is set, every
+/// post-step state is kept (savestates for search and telemetry for oracle
+/// comparison).
 pub fn rollout(
     sim: &Sim,
     init: &CarState,
@@ -23,23 +23,43 @@ pub fn rollout(
     max_ticks: u32,
     record: bool,
 ) -> Rollout {
+    rollout_with(
+        sim,
+        init,
+        actions.len() as u32,
+        max_ticks,
+        record,
+        |i, _| actions[i as usize],
+    )
+}
+
+/// Like `rollout` but actions come from a closure of the step index and the
+/// current state (closed-loop controllers, distance-indexed genomes), which
+/// avoids materialising long action vectors for every candidate. Runs at
+/// most `n_actions` steps.
+pub fn rollout_with(
+    sim: &Sim,
+    init: &CarState,
+    n_actions: u32,
+    max_ticks: u32,
+    record: bool,
+    action_at: impl Fn(u32, &CarState) -> Action,
+) -> Rollout {
     let mut s = *init;
     let mut states = if record {
-        Vec::with_capacity(actions.len().min(max_ticks as usize) + 1)
+        Vec::with_capacity((n_actions.min(max_ticks) + 1) as usize)
     } else {
         Vec::new()
     };
     if record {
         states.push(s);
     }
-    let hold = actions.last().copied().unwrap_or(Action::coast());
-    let mut i = 0usize;
+    let mut i = 0u32;
     let mut ticks = 0u64;
     let mut max_speed = 0.0f32;
     let mut speed_sum = 0.0f64;
-    let mut cp_hit = 0u32;
-    while !sim.is_terminal(&s, max_ticks) {
-        let a = if i < actions.len() { actions[i] } else { hold };
+    while i < n_actions && !sim.is_terminal(&s, max_ticks) {
+        let a = action_at(i, &s);
         sim.step(&mut s, a);
         i += 1;
         ticks += 1;
@@ -51,11 +71,7 @@ pub fn rollout(
         if record {
             states.push(s);
         }
-        if actions.is_empty() && i > max_ticks as usize {
-            break;
-        }
     }
-    cp_hit = cp_hit.max(s.next_checkpoint);
     let result = RunResult {
         finished: s.finished,
         time_ms: if s.finished {
@@ -64,7 +80,7 @@ pub fn rollout(
             s.tick * rti_core::TICK_MS
         },
         ticks: s.tick - init.tick,
-        checkpoints_hit: cp_hit,
+        checkpoints_hit: s.next_checkpoint,
         progress: s.progress,
         max_speed,
         mean_speed: if ticks > 0 {
@@ -100,13 +116,15 @@ pub fn rollout_batch(
 }
 
 /// Build a `Trajectory` record from a rollout of `actions` on this sim.
+/// Actions are truncated to the ticks actually simulated.
 pub fn to_trajectory(
     sim: &Sim,
-    actions: Vec<Action>,
+    mut actions: Vec<Action>,
     ro: &Rollout,
     method: &str,
     record_states: bool,
 ) -> Trajectory {
+    actions.truncate(ro.ticks as usize);
     Trajectory {
         track_hash: sim.geom.track.hash(),
         track_name: sim.geom.track.name.clone(),
