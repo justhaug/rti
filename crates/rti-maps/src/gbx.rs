@@ -279,11 +279,7 @@ fn parse_body(body: &[u8], out: &mut ParsedMap) {
     let mut r = Reader::new(body);
     let mut ids = IdState::default();
     let mut nodes = NodeState::default();
-    loop {
-        let id = match r.u32() {
-            Ok(v) => v,
-            Err(_) => break,
-        };
+    while let Ok(id) = r.u32() {
         if id == FACADE {
             break;
         }
@@ -368,7 +364,7 @@ fn parse_body(body: &[u8], out: &mut ParsedMap) {
 }
 
 fn scan_next_skippable(body: &[u8], from: usize) -> Option<usize> {
-    let mut i = from.saturating_sub(4).max(0);
+    let mut i = from.saturating_sub(4);
     while i + 8 <= body.len() {
         let id = u32::from_le_bytes(body[i..i + 4].try_into().unwrap());
         if id & 0xFFFF_F000 == CLASS_CHALLENGE {

@@ -86,10 +86,8 @@ pub fn project_states(track: &Track, states: &[TmState]) -> Vec<CarState> {
     let mut seg = 0usize;
     for s in states {
         let (x, y) = frame.to_local(s.pos);
-        let (vx, vy) = {
-            let v = frame.to_local([s.vel[0] + frame.origin[0], 0.0, s.vel[2] + frame.origin[2]]);
-            v
-        };
+        let (vx, vy) =
+            { frame.to_local([s.vel[0] + frame.origin[0], 0.0, s.vel[2] + frame.origin[2]]) };
         let loc = geom.locate(x, y, seg);
         seg = loc.seg;
         out.push(CarState {

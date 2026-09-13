@@ -39,12 +39,7 @@ struct Piece {
 }
 
 /// Local template geometry: (entry, exit, path) in the block's own frame.
-fn local_geometry(
-    shape: Shape,
-    len: u32,
-    size: u32,
-    shift: i32,
-) -> ((f32, f32), (f32, f32), Vec<(f32, f32)>) {
+fn local_geometry(shape: Shape, len: u32, size: u32, shift: i32) -> LocalGeometry {
     let h = CELL / 2.0;
     match shape {
         Shape::Straight | Shape::Marker => {
@@ -208,6 +203,11 @@ fn key(p: (f32, f32)) -> (i32, i32) {
 
 /// Chain pieces from a start marker; pieces can be traversed in either
 /// direction (entry↔exit) since block direction conventions are uncertain.
+/// (pieces, chain sequence, reached finish, convention description, bridged gaps)
+type Candidate = (Vec<Piece>, Vec<(usize, bool)>, bool, String, usize);
+/// (entry, exit, path) of a template in its local frame.
+type LocalGeometry = ((f32, f32), (f32, f32), Vec<(f32, f32)>);
+
 /// Unrecognised blocks between two recognised ones are bridged with a
 /// straight segment up to this many cells long.
 const MAX_GAP_CELLS: usize = 3;
@@ -318,7 +318,7 @@ pub fn compile_track(
         }
     }
     let mut u: Vec<(String, usize)> = unrec.into_iter().collect();
-    u.sort_by(|a, b| b.1.cmp(&a.1));
+    u.sort_by_key(|a| std::cmp::Reverse(a.1));
     u.truncate(30);
     report.unrecognized = u;
     anyhow::ensure!(
@@ -326,7 +326,7 @@ pub fn compile_track(
         "no recognised road blocks in map (catalog coverage 0)"
     );
 
-    let mut best: Option<(Vec<Piece>, Vec<(usize, bool)>, bool, String, usize)> = None;
+    let mut best: Option<Candidate> = None;
     let has_free = map.blocks.iter().any(|b| b.free && b.free_pos.is_some());
     let yaw_signs: &[f32] = if has_free { &[1.0, -1.0] } else { &[1.0] };
     for origin_cell in [true, false] {
@@ -413,8 +413,6 @@ pub fn compile_track(
         }
     }
     anyhow::ensure!(nodes.len() >= 2, "compiled track has fewer than two nodes");
-    // drop the original block index bookkeeping; keep the pieces count
-    let _ = pieces.iter().map(|p| p.idx).count();
     let mut track = Track {
         name: name.to_string(),
         description: format!(

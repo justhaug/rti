@@ -89,7 +89,7 @@ pub fn cem(input: &SearchInput) -> SearchOutcome {
             stale = 0;
         } else {
             stale += 1;
-            if stale % 8 == 0 {
+            if stale.is_multiple_of(8) {
                 // restart exploration around the best when stuck
                 for s in &mut std {
                     *s = (*s * 2.0).min(sigma0);
