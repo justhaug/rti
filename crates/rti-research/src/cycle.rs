@@ -131,8 +131,8 @@ pub fn validate_spec(s: &Session, spec: &mut ExperimentSpec) -> anyhow::Result<(
         }
         ExperimentSpec::ImportReplay { source, .. } => {
             anyhow::ensure!(
-                std::path::Path::new(source).is_file(),
-                "import_replay: {source:?} is not a file"
+                source.starts_with("tmx:") || std::path::Path::new(source).is_file(),
+                "import_replay: {source:?} is neither a file nor tmx:<replay id>"
             );
         }
     }

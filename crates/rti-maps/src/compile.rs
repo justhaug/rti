@@ -1,6 +1,16 @@
 //! Chain block placements into a planar `Track`.
+//!
+//! Every recognised block becomes a `Piece` with a footprint and a set of
+//! ports (edge midpoints in world coordinates). Two-port pieces (straights,
+//! curves, chicanes, markers) have one path; open pieces (platforms) can be
+//! crossed straight or with a quarter turn between any two edges. The
+//! track is the cheapest port-to-port path from a start marker to a finish
+//! marker (Dijkstra; straight continuations are cheaper than turns, small
+//! gaps of unrecognised cells are bridged at a cost). Without a reachable
+//! finish, the longest reachable chain is used.
 
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 
 use rti_core::track::TrackNode;
 use rti_core::{Surface, Track};
@@ -25,93 +35,27 @@ pub struct CompileReport {
     pub warnings: Vec<String>,
 }
 
-/// A placed road piece in world (planar) coordinates.
+type P2 = (f32, f32);
+
+/// A placed piece in world (planar) coordinates.
 #[derive(Clone, Debug)]
 struct Piece {
-    #[allow(dead_code)]
-    idx: usize,
-    entry: (f32, f32),
-    exit: (f32, f32),
-    /// centerline points from entry to exit (inclusive)
-    path: Vec<(f32, f32)>,
+    ports: Vec<P2>,
+    /// outward unit direction at each port
+    dirs: Vec<P2>,
+    /// world position of the piece centre (for open-piece paths)
+    centre: P2,
+    /// paths for two-port pieces: from port 0 to port 1
+    fixed_path: Option<Vec<P2>>,
     half_width: f32,
     surface: Surface,
     marker: Option<Marker>,
+    y: f32,
 }
 
-/// Local template geometry: (entry, exit, path) in the block's own frame.
-fn local_geometry(shape: Shape, len: u32, size: u32, shift: i32) -> LocalGeometry {
-    let h = CELL / 2.0;
-    match shape {
-        Shape::Straight | Shape::Marker => {
-            let l = len.max(1) as f32 * CELL;
-            ((h, 0.0), (h, l), vec![(h, 0.0), (h, l * 0.5), (h, l)])
-        }
-        Shape::Curve => {
-            // Verified on real maps: a Curve at direction 0 joins the TOP edge
-            // (v = n*CELL, last... first column) to the LEFT edge (u = 0), arc
-            // centred on the top-left corner of the footprint.
-            let n = size.max(1) as f32;
-            let r = n * CELL - h; // centerline radius
-            let cx = 0.0;
-            let cy = n * CELL;
-            let steps = (6.0 * n) as usize;
-            let mut path = vec![];
-            for i in 0..=steps {
-                // from angle 0 (point (r, cy) on the top edge) down to -90° (point (0, cy - r) on the left edge)
-                let a = -(i as f32 / steps as f32) * std::f32::consts::FRAC_PI_2;
-                path.push((cx + r * a.cos(), cy + r * a.sin()));
-            }
-            ((r, cy), (0.0, cy - r), path)
-        }
-        Shape::Chicane => {
-            let l = len.max(2) as f32 * CELL;
-            let du = -(shift as f32) * CELL; // shift left = -u in a right-handed local frame
-            let steps = 12;
-            let mut path = vec![];
-            for i in 0..=steps {
-                let t = i as f32 / steps as f32;
-                let s = 0.5 - 0.5 * (std::f32::consts::PI * t).cos();
-                path.push((h + du * s, l * t));
-            }
-            ((h, 0.0), (h + du, l), path)
-        }
-    }
-}
-
-/// Footprint in local cell units (i along u, j along v).
-fn footprint(shape: Shape, len: u32, size: u32, shift: i32) -> (i32, i32, i32) {
-    // returns (min_i, width_i, len_j)
-    match shape {
-        Shape::Straight | Shape::Marker => (0, 1, len.max(1) as i32),
-        Shape::Curve => (0, size.max(1) as i32, size.max(1) as i32),
-        Shape::Chicane => {
-            if shift > 0 {
-                (-1, 2, len.max(2) as i32)
-            } else {
-                (0, 2, len.max(2) as i32)
-            }
-        }
-    }
-}
-
-/// Placement conventions the compiler tries. The rotation sign for grid
-/// blocks was verified on real maps (+1 with `rot`); the origin convention
-/// for multi-cell blocks and the yaw sign of free blocks are still tried.
-#[derive(Clone, Copy, Debug)]
-struct Convention {
-    /// +1: dir rotates counter-clockwise in (x, z); -1: clockwise.
-    sign: i32,
-    /// whether the map coord is the rotated origin cell (true) or the
-    /// bounding-box minimum (false).
-    origin_cell: bool,
-    /// yaw sign for free blocks
-    yaw_sign: f32,
-}
-
-fn rot(p: (f32, f32), dir: u8, sign: i32) -> (f32, f32) {
-    let q = ((dir as i32 * sign).rem_euclid(4)) as u8;
-    match q {
+/// Rotate a local point by `dir` quarter turns (counter-clockwise, verified).
+fn rot(p: P2, dir: u8) -> P2 {
+    match dir & 3 {
         0 => p,
         1 => (-p.1, p.0),
         2 => (-p.0, -p.1),
@@ -119,63 +63,130 @@ fn rot(p: (f32, f32), dir: u8, sign: i32) -> (f32, f32) {
     }
 }
 
-fn place(block: &MapBlock, idx: usize, cat: &Catalog, conv: Convention) -> Option<Piece> {
+/// Local geometry: ports, outward directions, optional fixed path.
+fn local(
+    shape: Shape,
+    len: u32,
+    size: u32,
+    shift: i32,
+) -> (Vec<P2>, Vec<P2>, Option<Vec<P2>>, (i32, i32, i32)) {
+    let h = CELL / 2.0;
+    match shape {
+        Shape::Straight | Shape::Marker => {
+            let l = len.max(1) as f32 * CELL;
+            (
+                vec![(h, 0.0), (h, l)],
+                vec![(0.0, -1.0), (0.0, 1.0)],
+                Some(vec![(h, 0.0), (h, l * 0.5), (h, l)]),
+                (0, 1, len.max(1) as i32),
+            )
+        }
+        Shape::Curve => {
+            // Verified on real maps (Curve1/2/3 at several rotations, with the
+            // bounding-box placement rule): footprint N×N from the origin
+            // cell, road enters through the top edge of the last column and
+            // leaves through the left edge of the first row; arc centred on
+            // the footprint's top-left corner.
+            let n = size.max(1) as f32;
+            let r = n * CELL - h;
+            let cy = n * CELL;
+            let steps = (6.0 * n) as usize;
+            let mut path = vec![];
+            for i in 0..=steps {
+                let a = -(i as f32 / steps as f32) * std::f32::consts::FRAC_PI_2;
+                path.push((r * a.cos(), cy + r * a.sin()));
+            }
+            (
+                vec![(r, cy), (0.0, cy - r)],
+                vec![(0.0, 1.0), (-1.0, 0.0)],
+                Some(path),
+                (0, size.max(1) as i32, size.max(1) as i32),
+            )
+        }
+        Shape::Chicane => {
+            // Verified: a "Right" chicane shifts toward negative u.
+            let l = len.max(2) as f32 * CELL;
+            let du = shift as f32 * CELL;
+            let steps = 12;
+            let mut path = vec![];
+            for i in 0..=steps {
+                let t = i as f32 / steps as f32;
+                let s = 0.5 - 0.5 * (std::f32::consts::PI * t).cos();
+                path.push((h + du * s, l * t));
+            }
+            let fp = if shift < 0 {
+                (-1, 2, len.max(2) as i32)
+            } else {
+                (0, 2, len.max(2) as i32)
+            };
+            (
+                vec![(h, 0.0), (h + du, l)],
+                vec![(0.0, -1.0), (0.0, 1.0)],
+                Some(path),
+                fp,
+            )
+        }
+        Shape::Open => {
+            let w = size.max(1) as f32 * CELL;
+            let l = len.max(1) as f32 * CELL;
+            // ports: bottom, top, left, right (midpoints); multi-cell edges get one port per cell
+            let mut ports = vec![];
+            let mut dirs = vec![];
+            for i in 0..size.max(1) {
+                let u = (i as f32 + 0.5) * CELL;
+                ports.push((u, 0.0));
+                dirs.push((0.0, -1.0));
+                ports.push((u, l));
+                dirs.push((0.0, 1.0));
+            }
+            for j in 0..len.max(1) {
+                let v = (j as f32 + 0.5) * CELL;
+                ports.push((0.0, v));
+                dirs.push((-1.0, 0.0));
+                ports.push((w, v));
+                dirs.push((1.0, 0.0));
+            }
+            (
+                ports,
+                dirs,
+                None,
+                (0, size.max(1) as i32, len.max(1) as i32),
+            )
+        }
+    }
+}
+
+fn place(block: &MapBlock, cat: &Catalog, origin_cell: bool, yaw_sign: f32) -> Option<Piece> {
     let res = cat.resolve(&block.name)?;
     let t = &res.template;
-    let (entry, exit, path) = local_geometry(t.shape, t.len, t.size, t.shift);
-    if block.free {
-        // free block: absolute origin + yaw about the vertical axis
-        let pos = block.free_pos?;
-        let yaw = block.free_pyr.map(|p| p[1]).unwrap_or(0.0) * conv.yaw_sign;
-        let (c, s) = (yaw.cos(), yaw.sin());
-        let to_world = move |p: (f32, f32)| -> (f32, f32) {
-            (pos[0] + c * p.0 - s * p.1, pos[2] + s * p.0 + c * p.1)
-        };
-        return Some(Piece {
-            idx,
-            entry: to_world(entry),
-            exit: to_world(exit),
-            path: path.into_iter().map(to_world).collect(),
-            half_width: t.half_width,
-            surface: res.surface,
-            marker: t.marker,
-        });
-    }
-    let (min_i, w, l) = footprint(t.shape, t.len, t.size, t.shift);
-    // local geometry lives in cells [min_i, min_i+w) × [0, l); shift so that
-    // the origin cell is the pivot
+    let (ports, dirs, path, (min_i, w, l)) = local(t.shape, t.len, t.size, t.shift);
     let pivot = (CELL / 2.0, CELL / 2.0);
-    let to_world = |p: (f32, f32)| -> (f32, f32) {
-        let local = (p.0 - pivot.0, p.1 - pivot.1);
-        let r = rot(local, block.dir, conv.sign);
-        let (ox, oz) = if conv.origin_cell {
+    let (to_world, to_world_dir): (Box<dyn Fn(P2) -> P2>, Box<dyn Fn(P2) -> P2>) = if block.free {
+        let pos = block.free_pos?;
+        let yaw = block.free_pyr.map(|p| p[1]).unwrap_or(0.0) * yaw_sign;
+        let (c, s) = (yaw.cos(), yaw.sin());
+        (
+            Box::new(move |p: P2| (pos[0] + c * p.0 - s * p.1, pos[2] + s * p.0 + c * p.1)),
+            Box::new(move |d: P2| (c * d.0 - s * d.1, s * d.0 + c * d.1)),
+        )
+    } else {
+        let dir = block.dir;
+        let (ox, oz) = if origin_cell {
             (block.coord[0] as f32 * CELL, block.coord[2] as f32 * CELL)
         } else {
-            // coord is the min corner of the rotated bounding box: compute
-            // the rotated footprint extent and offset so its min is at coord
             let corners = [
-                rot(
-                    (min_i as f32 * CELL - pivot.0, -pivot.1),
-                    block.dir,
-                    conv.sign,
-                ),
-                rot(
-                    ((min_i + w) as f32 * CELL - pivot.0, -pivot.1),
-                    block.dir,
-                    conv.sign,
-                ),
+                rot((min_i as f32 * CELL - pivot.0, -pivot.1), dir),
+                rot(((min_i + w) as f32 * CELL - pivot.0, -pivot.1), dir),
                 rot(
                     (min_i as f32 * CELL - pivot.0, l as f32 * CELL - pivot.1),
-                    block.dir,
-                    conv.sign,
+                    dir,
                 ),
                 rot(
                     (
                         (min_i + w) as f32 * CELL - pivot.0,
                         l as f32 * CELL - pivot.1,
                     ),
-                    block.dir,
-                    conv.sign,
+                    dir,
                 ),
             ];
             let minx = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
@@ -185,126 +196,348 @@ fn place(block: &MapBlock, idx: usize, cat: &Catalog, conv: Convention) -> Optio
                 block.coord[2] as f32 * CELL - minz - pivot.1,
             )
         };
-        (ox + pivot.0 + r.0, oz + pivot.1 + r.1)
+        (
+            Box::new(move |p: P2| {
+                let r = rot((p.0 - pivot.0, p.1 - pivot.1), dir);
+                (ox + pivot.0 + r.0, oz + pivot.1 + r.1)
+            }),
+            Box::new(move |d: P2| rot(d, dir)),
+        )
     };
+    let centre = to_world((
+        (min_i as f32 + w as f32 / 2.0) * CELL,
+        l as f32 * CELL / 2.0,
+    ));
     Some(Piece {
-        idx,
-        entry: to_world(entry),
-        exit: to_world(exit),
-        path: path.into_iter().map(to_world).collect(),
+        ports: ports.into_iter().map(|p| to_world(p)).collect(),
+        dirs: dirs.into_iter().map(|d| to_world_dir(d)).collect(),
+        centre,
+        fixed_path: path.map(|p| p.into_iter().map(|q| to_world(q)).collect()),
         half_width: t.half_width,
         surface: res.surface,
         marker: t.marker,
+        y: block
+            .free_pos
+            .map(|p| p[1])
+            .unwrap_or(block.coord[1] as f32 * 8.0),
     })
 }
 
-fn key(p: (f32, f32)) -> (i32, i32) {
+fn key(p: P2) -> (i32, i32) {
     ((p.0 / 4.0).round() as i32, (p.1 / 4.0).round() as i32)
 }
 
-/// Chain pieces from a start marker; pieces can be traversed in either
-/// direction (entry↔exit) since block direction conventions are uncertain.
-/// (pieces, chain sequence, reached finish, convention description, bridged gaps)
-type Candidate = (Vec<Piece>, Vec<(usize, bool)>, bool, String, usize);
-/// (entry, exit, path) of a template in its local frame.
-type LocalGeometry = ((f32, f32), (f32, f32), Vec<(f32, f32)>);
+/// Path through piece `pi` entering at port `a`, leaving at port `b`.
+fn path_through(p: &Piece, a: usize, b: usize) -> Vec<P2> {
+    if let Some(fp) = &p.fixed_path {
+        let mut v = fp.clone();
+        if a == 1 {
+            v.reverse();
+        }
+        return v;
+    }
+    let pa = p.ports[a];
+    let pb = p.ports[b];
+    let da = p.dirs[a];
+    let db = p.dirs[b];
+    let straight = (da.0 * db.0 + da.1 * db.1) < -0.5;
+    if straight {
+        vec![pa, ((pa.0 + pb.0) / 2.0, (pa.1 + pb.1) / 2.0), pb]
+    } else {
+        // quarter arc via the corner region: bezier-ish through the centre
+        let c = p.centre;
+        let mut v = vec![];
+        for i in 0..=8 {
+            let t = i as f32 / 8.0;
+            let x = (1.0 - t).powi(2) * pa.0 + 2.0 * (1.0 - t) * t * c.0 + t * t * pb.0;
+            let y = (1.0 - t).powi(2) * pa.1 + 2.0 * (1.0 - t) * t * c.1 + t * t * pb.1;
+            v.push((x, y));
+        }
+        v
+    }
+}
 
-/// Unrecognised blocks between two recognised ones are bridged with a
-/// straight segment up to this many cells long.
 const MAX_GAP_CELLS: usize = 3;
 
-fn chain(pieces: &[Piece]) -> (Vec<(usize, bool)>, bool, usize) {
-    let mut best_gaps = 0usize;
-    let mut by_point: HashMap<(i32, i32), Vec<(usize, bool)>> = HashMap::new();
-    for (i, p) in pieces.iter().enumerate() {
-        by_point.entry(key(p.entry)).or_default().push((i, false)); // enter via entry, forward
-        by_point.entry(key(p.exit)).or_default().push((i, true)); // enter via exit, reversed
+#[derive(Clone, Copy, PartialEq)]
+struct QItem {
+    cost: f32,
+    piece: usize,
+    entry: usize,
+}
+impl Eq for QItem {}
+impl Ord for QItem {
+    fn cmp(&self, o: &Self) -> Ordering {
+        o.cost.partial_cmp(&self.cost).unwrap_or(Ordering::Equal)
     }
+}
+impl PartialOrd for QItem {
+    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
+struct Chain {
+    /// (piece, entry port, exit port)
+    seq: Vec<(usize, usize, usize)>,
+    finished: bool,
+    gaps: usize,
+    score: (u32, u32),
+}
+
+fn chain(pieces: &[Piece]) -> Chain {
+    // port index: location → (piece, port)
+    let mut by_point: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
+    for (i, p) in pieces.iter().enumerate() {
+        for (k, &pt) in p.ports.iter().enumerate() {
+            by_point.entry(key(pt)).or_default().push((i, k));
+        }
+    }
+    let n = pieces.len();
+    // state = (piece, entry port); "entry" of a start = virtual port usize::MAX handled by trying each exit
     let starts: Vec<usize> = pieces
         .iter()
         .enumerate()
         .filter(|(_, p)| matches!(p.marker, Some(Marker::Start | Marker::StartFinish)))
         .map(|(i, _)| i)
         .collect();
-    let mut best: Vec<(usize, bool)> = vec![];
-    let mut best_finished = false;
-    let candidates: Vec<(usize, bool)> = if starts.is_empty() {
-        (0..pieces.len())
-            .flat_map(|i| [(i, false), (i, true)])
-            .collect()
-    } else {
-        starts
-            .iter()
-            .flat_map(|&i| [(i, false), (i, true)])
-            .collect()
-    };
-    for (s, rev) in candidates {
-        let mut used = vec![false; pieces.len()];
-        let mut gaps: Vec<(usize, usize)> = vec![];
-        let mut seq = vec![(s, rev)];
-        used[s] = true;
-        let mut finished = matches!(pieces[s].marker, Some(Marker::Finish));
-        loop {
-            let (cur, r) = *seq.last().unwrap();
-            let p = &pieces[cur];
-            let out = if r { p.entry } else { p.exit };
-            // direction of travel at the exit, for bridging small gaps
-            let (a, b) = if r {
-                (p.path[1.min(p.path.len() - 1)], p.path[0])
-            } else {
-                (p.path[p.path.len() - 2], p.path[p.path.len() - 1])
-            };
-            let d = ((b.0 - a.0), (b.1 - a.1));
-            let dl = (d.0 * d.0 + d.1 * d.1).sqrt().max(1e-3);
-            let dir = (d.0 / dl, d.1 / dl);
-            let mut next = by_point
-                .get(&key(out))
-                .and_then(|v| v.iter().find(|(j, _)| !used[*j]).copied());
-            let mut gap = 0usize;
-            if next.is_none() {
-                for cells in 1..=MAX_GAP_CELLS {
-                    let probe = (
-                        out.0 + dir.0 * CELL * cells as f32,
-                        out.1 + dir.1 * CELL * cells as f32,
-                    );
-                    if let Some(n) = by_point
-                        .get(&key(probe))
-                        .and_then(|v| v.iter().find(|(j, _)| !used[*j]).copied())
-                    {
-                        next = Some(n);
-                        gap = cells;
-                        break;
-                    }
-                }
-            }
-            match next {
-                Some((j, jr)) => {
-                    used[j] = true;
-                    if gap > 0 {
-                        gaps.push((seq.len(), gap));
-                    }
-                    seq.push((j, jr));
-                    if matches!(pieces[j].marker, Some(Marker::Finish | Marker::StartFinish)) {
-                        finished = true;
-                        break;
-                    }
-                }
-                None => break,
-            }
+    // seeds: start markers, plus every piece with a port that has no
+    // neighbour (dead ends), so a road that is not attached to a start block
+    // (jumps, free blocks, unrecognised connectors) still gets chained
+    let mut seeds: Vec<usize> = starts.clone();
+    for (i, p) in pieces.iter().enumerate() {
+        if seeds.len() > 4000 {
+            break;
         }
-        if (finished && !best_finished) || (finished == best_finished && seq.len() > best.len()) {
-            best = seq;
-            best_finished = finished;
-            best_gaps = gaps.len();
+        let dead_end = p.ports.iter().enumerate().any(|(k, pt)| {
+            let d = p.dirs[k];
+            let probe = (pt.0 + d.0 * CELL, pt.1 + d.1 * CELL);
+            let any = |q: P2| {
+                by_point
+                    .get(&key(q))
+                    .map(|v| v.iter().any(|(j, _)| *j != i))
+                    .unwrap_or(false)
+            };
+            !any(*pt) && !any(probe)
+        });
+        if dead_end && !seeds.contains(&i) {
+            seeds.push(i);
         }
     }
-    (best, best_finished, best_gaps)
+    let mut best: Option<Chain> = None;
+    let candidates: Vec<usize> = if seeds.is_empty() {
+        (0..n).collect()
+    } else {
+        seeds
+    };
+    let _ = &starts;
+    for s in candidates {
+        // Dijkstra from s (entry = any port; we enter at port e meaning we leave via the others)
+        let idx = |piece: usize, entry: usize| piece * 16 + entry;
+        let mut dist: HashMap<usize, f32> = HashMap::new();
+        let mut prev: HashMap<usize, (usize, usize, usize)> = HashMap::new(); // state → (prev piece, prev entry, prev exit)
+        let mut gapc: HashMap<usize, usize> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+        for e in 0..pieces[s].ports.len().min(16) {
+            dist.insert(idx(s, e), 0.0);
+            heap.push(QItem {
+                cost: 0.0,
+                piece: s,
+                entry: e,
+            });
+        }
+        let mut goal: Option<(usize, usize)> = None;
+        let mut deepest: (f32, usize, usize) = (-1.0, s, 0);
+        let mut visited = std::collections::HashSet::new();
+        while let Some(QItem { cost, piece, entry }) = heap.pop() {
+            let st = idx(piece, entry);
+            if !visited.insert(st) {
+                continue;
+            }
+            if cost > deepest.0 {
+                deepest = (cost, piece, entry);
+            }
+            if piece != s
+                && matches!(
+                    pieces[piece].marker,
+                    Some(Marker::Finish | Marker::StartFinish)
+                )
+            {
+                goal = Some((piece, entry));
+                break;
+            }
+            let p = &pieces[piece];
+            for exit in 0..p.ports.len().min(16) {
+                if exit == entry {
+                    continue;
+                }
+                // two-port pieces: only the other port; open: any other port
+                if p.fixed_path.is_some() && p.ports.len() == 2 && exit != 1 - entry {
+                    continue;
+                }
+                let d_in = p.dirs[entry];
+                let d_out = p.dirs[exit];
+                let turn = if (d_in.0 * d_out.0 + d_in.1 * d_out.1) < -0.5 {
+                    0.0
+                } else {
+                    0.6
+                };
+                let out = p.ports[exit];
+                let mut targets: Vec<((usize, usize), f32, usize)> = vec![];
+                for cells in 0..=MAX_GAP_CELLS {
+                    let probe = (
+                        out.0 + d_out.0 * CELL * cells as f32,
+                        out.1 + d_out.1 * CELL * cells as f32,
+                    );
+                    if let Some(v) = by_point.get(&key(probe)) {
+                        for &(j, k) in v {
+                            if j == piece {
+                                continue;
+                            }
+                            // the other piece's port must face us
+                            let dj = pieces[j].dirs[k];
+                            if dj.0 * d_out.0 + dj.1 * d_out.1 > -0.5 {
+                                continue;
+                            }
+                            let dy = (pieces[j].y - p.y).abs();
+                            if dy > 24.0 {
+                                continue;
+                            }
+                            targets.push((
+                                (j, k),
+                                1.0 + turn + cells as f32 * 2.0 + dy * 0.2,
+                                cells,
+                            ));
+                        }
+                        if !targets.is_empty() {
+                            break;
+                        }
+                    }
+                }
+                for ((j, k), c, cells) in targets {
+                    let nst = idx(j, k);
+                    let nc = cost + c;
+                    if nc < *dist.get(&nst).unwrap_or(&f32::INFINITY) {
+                        dist.insert(nst, nc);
+                        prev.insert(nst, (piece, entry, exit));
+                        gapc.insert(nst, if cells > 0 { 1 } else { 0 });
+                        heap.push(QItem {
+                            cost: nc,
+                            piece: j,
+                            entry: k,
+                        });
+                    }
+                }
+            }
+        }
+        let (end_piece, end_entry, finished) = match goal {
+            Some((p, e)) => (p, e, true),
+            None => (deepest.1, deepest.2, false),
+        };
+        // reconstruct
+        let mut seq: Vec<(usize, usize, usize)> = vec![];
+        let mut gaps = 0usize;
+        let mut cur = (end_piece, end_entry);
+        // exit of the last piece: for a finish, the port opposite the entry (or any other)
+        let last_exit = {
+            let p = &pieces[end_piece];
+            if p.ports.len() == 2 {
+                1 - end_entry
+            } else {
+                (0..p.ports.len())
+                    .find(|&x| {
+                        x != end_entry
+                            && (p.dirs[x].0 * p.dirs[end_entry].0
+                                + p.dirs[x].1 * p.dirs[end_entry].1)
+                                < -0.5
+                    })
+                    .unwrap_or(end_entry)
+            }
+        };
+        seq.push((end_piece, end_entry, last_exit));
+        let mut guard = 0;
+        while let Some(&(pp, pe, px)) = prev.get(&idx(cur.0, cur.1)) {
+            gaps += gapc.get(&idx(cur.0, cur.1)).copied().unwrap_or(0);
+            seq.push((pp, pe, px));
+            cur = (pp, pe);
+            guard += 1;
+            if guard > 100_000 {
+                break;
+            }
+        }
+        seq.reverse();
+        // the start piece: enter from the port opposite to its exit
+        if let Some(first) = seq.first_mut() {
+            let p = &pieces[first.0];
+            if p.ports.len() == 2 {
+                first.1 = 1 - first.2;
+            } else {
+                first.1 = (0..p.ports.len())
+                    .find(|&x| {
+                        x != first.2
+                            && (p.dirs[x].0 * p.dirs[first.2].0 + p.dirs[x].1 * p.dirs[first.2].1)
+                                < -0.5
+                    })
+                    .unwrap_or(first.1);
+            }
+        }
+        let from_start = matches!(pieces[s].marker, Some(Marker::Start | Marker::StartFinish));
+        // longer chains win; finishing and starting at a start block are bonuses
+        // score in metres: road length plus bonuses for reaching a finish and starting at a start block
+        let metres: f32 = seq
+            .iter()
+            .map(|&(pi, a, b)| {
+                let path = path_through(&pieces[pi], a, b);
+                path.windows(2)
+                    .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
+                    .sum::<f32>()
+            })
+            .sum();
+        let score = (
+            0u32,
+            (metres + if finished { 300.0 } else { 0.0 } + if from_start { 100.0 } else { 0.0 })
+                as u32,
+        );
+        if std::env::var("RTI_CHAIN_DEBUG").is_ok() {
+            let p0 = pieces[s].ports[0];
+            eprintln!("seed {s} at ({:.0},{:.0}) marker {:?}: pieces {} metres {:.0} finished {finished} score {:?}", p0.0, p0.1, pieces[s].marker, seq.len(), metres, score);
+        }
+        let better = match &best {
+            None => true,
+            Some(b) => score > b.score,
+        };
+        if better {
+            best = Some(Chain {
+                seq,
+                finished,
+                gaps,
+                score,
+            });
+        }
+    }
+    best.unwrap_or(Chain {
+        seq: vec![],
+        finished: false,
+        gaps: 0,
+        score: (0, 0),
+    })
 }
 
 pub fn compile_track(
     map: &ParsedMap,
     cat: &Catalog,
     name: &str,
+) -> anyhow::Result<(Track, CompileReport)> {
+    compile_track_with(map, cat, name, None)
+}
+
+/// Like `compile_track`, optionally forcing the multi-cell origin convention
+/// (`Some(true)` = origin cell, `Some(false)` = bounding-box minimum).
+pub fn compile_track_with(
+    map: &ParsedMap,
+    cat: &Catalog,
+    name: &str,
+    force_origin_cell: Option<bool>,
 ) -> anyhow::Result<(Track, CompileReport)> {
     let mut report = CompileReport {
         blocks_total: map.blocks.len(),
@@ -324,45 +557,50 @@ pub fn compile_track(
     report.unrecognized = u;
     anyhow::ensure!(
         report.blocks_recognized > 0,
-        "no recognised road blocks in map (catalog coverage 0)"
+        "no recognised drivable blocks in map (catalog coverage 0)"
     );
 
-    let mut best: Option<Candidate> = None;
     let has_free = map.blocks.iter().any(|b| b.free && b.free_pos.is_some());
     let yaw_signs: &[f32] = if has_free { &[1.0, -1.0] } else { &[1.0] };
-    for origin_cell in [true, false] {
+    let mut best: Option<(Vec<Piece>, Chain, String)> = None;
+    // Placement rule (verified on real maps): the block coordinate is the
+    // minimum corner of the rotated footprint's bounding box.
+    let conventions: Vec<bool> = match force_origin_cell {
+        Some(v) => vec![v],
+        None => vec![false],
+    };
+    for origin_cell in conventions {
         for &yaw_sign in yaw_signs {
-            let conv = Convention {
-                sign: 1,
-                origin_cell,
-                yaw_sign,
-            };
             let pieces: Vec<Piece> = map
                 .blocks
                 .iter()
-                .enumerate()
-                .filter_map(|(i, b)| place(b, i, cat, conv))
+                .filter_map(|b| place(b, cat, origin_cell, yaw_sign))
                 .collect();
-            let (seq, finished, gaps) = chain(&pieces);
+            if pieces.len() > 60_000 {
+                anyhow::bail!("too many drivable pieces ({})", pieces.len());
+            }
+            let ch = chain(&pieces);
             let desc = format!("origin_cell={origin_cell} yaw_sign={yaw_sign}");
             let better = match &best {
                 None => true,
-                Some((_, bseq, bfin, _, _)) => {
-                    (finished && !bfin) || (finished == *bfin && seq.len() > bseq.len())
+                Some((_, b, _)) => {
+                    (ch.finished && !b.finished)
+                        || (ch.finished == b.finished && ch.seq.len() > b.seq.len())
                 }
             };
             if better {
-                best = Some((pieces, seq, finished, desc, gaps));
+                best = Some((pieces, ch, desc));
             }
         }
     }
-    let (pieces, seq, finished, desc, gaps) = best.unwrap();
+    let (pieces, ch, desc) = best.unwrap();
     report.convention = desc;
-    report.bridged_gaps = gaps;
-    report.blocks_chained = seq.len();
-    report.finish_found = finished;
+    report.blocks_chained = ch.seq.len();
+    report.finish_found = ch.finished;
+    report.bridged_gaps = ch.gaps;
+    anyhow::ensure!(!ch.seq.is_empty(), "could not chain any piece");
     report.start_found = matches!(
-        pieces[seq[0].0].marker,
+        pieces[ch.seq[0].0].marker,
         Some(Marker::Start | Marker::StartFinish)
     );
     if !report.start_found {
@@ -370,27 +608,34 @@ pub fn compile_track(
             .warnings
             .push("no start block recognised; chain begins at an arbitrary piece".into());
     }
-    if !finished {
+    if !ch.finished {
         report.warnings.push(
             "chain did not reach a finish block; track ends where the road could not be followed"
                 .into(),
         );
     }
 
-    // build nodes
     let mut nodes: Vec<TrackNode> = vec![];
     let mut checkpoints = vec![];
     let mut finish = None;
-    for (i, &(pi, rev)) in seq.iter().enumerate() {
+    for (i, &(pi, a, b)) in ch.seq.iter().enumerate() {
         let p = &pieces[pi];
-        let mut path = p.path.clone();
-        if rev {
-            path.reverse();
-        }
+        let path = path_through(p, a, b);
         let start_idx = nodes.len();
         for (k, &(x, y)) in path.iter().enumerate() {
             if i > 0 && k == 0 {
-                continue; // shared with the previous piece's last point
+                if let Some(last) = nodes.last() {
+                    // bridge gap with a straight segment (last node → this port)
+                    if (last.x - x).abs() > 1e-3 || (last.y - y).abs() > 1e-3 {
+                        nodes.push(TrackNode {
+                            x,
+                            y,
+                            half_width: p.half_width,
+                            surface: p.surface,
+                        });
+                    }
+                }
+                continue;
             }
             if let Some(last) = nodes.last() {
                 if (last.x - x).abs() < 1e-3 && (last.y - y).abs() < 1e-3 {
@@ -421,7 +666,7 @@ pub fn compile_track(
             map.info.name,
             map.info.author_nick,
             map.blocks.len(),
-            seq.len(),
+            ch.seq.len(),
             report.convention
         ),
         nodes,
@@ -438,7 +683,6 @@ pub fn compile_track(
     if let Some(f) = track.finish {
         track.checkpoints.retain(|&c| c < f);
     }
-    // author time gives a sensible tick cap
     if map.info.author_ms > 0 {
         track.max_ticks = ((map.info.author_ms / 10) * 3).max(3000);
     }

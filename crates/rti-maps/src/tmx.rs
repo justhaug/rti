@@ -158,6 +158,46 @@ impl TmxClient {
         Ok(bytes)
     }
 
+    /// Download a replay file (`/recordgbx/{ReplayId}`).
+    pub fn download_replay(&self, replay_id: u64) -> anyhow::Result<Vec<u8>> {
+        let mut resp = self
+            .agent
+            .get(format!("{}/recordgbx/{replay_id}", self.base))
+            .call()?;
+        let bytes = resp
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024 * 1024)
+            .read_to_vec()?;
+        anyhow::ensure!(
+            bytes.starts_with(b"GBX"),
+            "TMX did not return a GBX file for replay {replay_id} ({} bytes)",
+            bytes.len()
+        );
+        Ok(bytes)
+    }
+
+    /// Replay leaderboard entries for a map: (ReplayId, ReplayTime ms, user name), best first.
+    pub fn replay_list(
+        &self,
+        map_id: u64,
+        count: usize,
+    ) -> anyhow::Result<Vec<(u64, u64, String)>> {
+        let v = self.replays(map_id, count)?;
+        let mut out = vec![];
+        for r in v["Results"].as_array().cloned().unwrap_or_default() {
+            if let (Some(id), Some(t)) = (r["ReplayId"].as_u64(), r["ReplayTime"].as_u64()) {
+                out.push((
+                    id,
+                    t,
+                    r["User"]["Name"].as_str().unwrap_or_default().to_string(),
+                ));
+            }
+        }
+        out.sort_by_key(|x| x.1);
+        Ok(out)
+    }
+
     /// Replay leaderboard for a map (fields best effort).
     pub fn replays(&self, map_id: u64, count: usize) -> anyhow::Result<serde_json::Value> {
         let body: serde_json::Value = self

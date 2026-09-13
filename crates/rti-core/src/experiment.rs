@@ -232,6 +232,6 @@ impl ExperimentSpec {
 - {"kind":"benchmark","ticks":<int>}
 - {"kind":"generate_track","name":<str>,"seed":<int>,"segments":<int>,"half_width":<float>}
 - {"kind":"import_map","source":<TMX id | TMX URL | path to .Map.Gbx>,"name":<track name|null>}  (downloads a real map from trackmania.exchange and compiles it; the compile report says how much of the map was understood)
-- {"kind":"import_replay","source":<path to .Replay.Gbx>,"name":<track name|null>}  (a human run from the real game: registers its map and the exact per-tick inputs as a trajectory with world "human:<login>"; use its hash as warm_start)"#
+- {"kind":"import_replay","source":<path to .Replay.Gbx | "tmx:<replay id>">,"name":<track name|null>}  (a human run from the real game: registers its map and the exact per-tick inputs as a trajectory with world "human:<login>"; use its hash as warm_start)"#
     }
 }

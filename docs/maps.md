@@ -32,16 +32,39 @@ Everything is best effort and reported: `ParsedMap.warnings`, `CompileReport.unr
 
 ## Conventions that were verified on real maps
 
-* Block direction `d` rotates the block `d × 90°` counter-clockwise in the (x, z) plane about the
-  centre of its origin cell (`compile::rot` with sign +1).
-* A `RoadTech*Curve1` at direction 0 joins its **top** edge (+z) to its **left** edge (−x), arc
-  centred on the footprint's top-left corner. Larger `CurveN` blocks are assumed to be the same
-  quarter circle scaled to N×N cells.
-* Straights and markers (start / checkpoint / finish / multilap) run through the cell along z.
+Checked by hand on several TMX maps and on the weekly-short map from a replay
+(`cargo run --release -p rti-maps --example chaindebug -- map.Map.Gbx` prints pieces and break points):
 
-Not yet verified: the origin cell of rotated multi-cell blocks (the compiler tries both the
-origin-cell and bounding-box conventions and keeps whichever chains more road), the yaw sign of
-free blocks (also tried both ways), chicane handedness, and slope/tilt footprints.
+* **Placement**: a block's coordinate is the minimum corner of the *rotated* footprint's bounding
+  box (cells are 32 m × 8 m × 32 m). Direction `d` rotates the piece `d × 90°` counter-clockwise in
+  the (x, z) plane.
+* **CurveN**: N×N footprint; the road enters through the top edge of the last column and leaves
+  through the left edge of the first row; the arc is centred on the footprint's top-left corner
+  (radius N·32 − 16). Holds for Curve1, Curve2, Curve3, banked/tilted variants.
+* **ChicaneXN Right/Left**: N cells long; "Right" shifts the exit one cell toward −u, "Left" toward +u.
+* **Straights, markers, slopes, tilts, transitions, specials**: 1 cell (or `X2`, `2x1`... long),
+  ports on the two ends.
+* **Open surfaces** (`*Base`, `*Base2x2`, platform diagonals, junctions): ports on every edge; the
+  chainer may cross them straight or with a quarter turn.
+* **Free blocks**: absolute position from chunk `0x0304305F`, yaw about the vertical axis (sign
+  still tried both ways).
+* Heights are used only as a matching penalty (ports more than 24 m apart in y never connect).
+
+The chainer is a Dijkstra search from every start block and every dead end; the track is the
+chain with the most road, with bonuses for reaching a finish and starting at a start block.
+
+## Catalog coverage
+
+Grammar-based: `catalog::tokens` splits a block name into CamelCase tokens; family tokens give the
+surface, shape tokens give geometry, and a list of ignore tokens (Wall, Pillar, Loop, Structure,
+Land, Tree, Cliff, ...) marks scenery. `catalog.toml` in the project root can add regex overrides
+and extra ignore tokens. Diagonal *road* pieces, loops, wall rides and branches with real
+geometry are not modelled.
+
+Coverage on 142 awarded TMX maps (`example census`): about a third of all blocks are drivable
+pieces, 29 % of those end up on the chosen chain, and 54 maps chain start-to-finish. Maps built
+from plain road pieces compile completely (e.g. "How to map": 71/71 pieces, 3.8 km,
+start-to-finish); platform fields and big height changes are where chains still break.
 
 ## Catalog coverage
 
@@ -68,6 +91,5 @@ cargo run -p rti-maps --example dump  -- some.Map.Gbx     # header, chunks, bloc
 
 * Full vanilla asset catalog with collision meshes / surfaces extracted from the game files, and
   embedded custom items — needed for a 3D simulator; the current simulator is planar.
-* Replay/ghost ingestion (TMX replays, Nadeo record ghosts) as trajectories in the archive so
-  search can start from human state of the art.
+* Nadeo record ghosts (TMX replays and local autosaves are already ingested, see `docs/oracle.md`).
 * Bulk ingestion (`search TMX → download N maps → compile → classify`) as a scheduled task.

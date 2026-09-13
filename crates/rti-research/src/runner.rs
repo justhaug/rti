@@ -115,7 +115,11 @@ pub fn run_import_replay(
 ) -> anyhow::Result<ExperimentReport> {
     use rti_maps::catalog::Catalog;
     let timer = CostTimer::start();
-    let bytes = std::fs::read(source)?;
+    let bytes = if let Some(id) = source.strip_prefix("tmx:") {
+        rti_maps::TmxClient::new().download_replay(id.trim().parse()?)?
+    } else {
+        std::fs::read(source)?
+    };
     let replay = rti_maps::parse_replay(&bytes)?;
     let ghost = replay
         .ghosts
@@ -406,6 +410,20 @@ pub fn run_import_map(
         created_at: String::new(),
     };
     s.archive.insert_map(&row)?;
+    // human runs from the TMX leaderboard (best few), as warm starts and references
+    let mut replays_imported = 0usize;
+    if let Some(m) = &tmx_meta {
+        if m.replay_count > 0 {
+            if let Ok(list) = rti_maps::TmxClient::new().replay_list(m.map_id, 5) {
+                for (rid, _t, _who) in list.into_iter().take(3) {
+                    match run_import_replay(s, &format!("tmx:{rid}"), Some(&track_name)) {
+                        Ok(_) => replays_imported += 1,
+                        Err(e) => tracing::warn!(replay = rid, error = %e, "replay import failed"),
+                    }
+                }
+            }
+        }
+    }
     let cost = timer.finish(0);
     let coverage = if report.blocks_recognized > 0 {
         report.blocks_chained as f64 / report.blocks_recognized as f64
@@ -431,10 +449,16 @@ pub fn run_import_map(
         row.wr_ms.map(|w| format!(", TMX WR {w} ms")).unwrap_or_default(),
         report.unrecognized.iter().take(6).map(|(n, c)| format!("{n}×{c}")).collect::<Vec<_>>().join(", ")
     );
+    let summary = if replays_imported > 0 {
+        format!("{summary}; imported {replays_imported} TMX replays as human trajectories")
+    } else {
+        summary
+    };
     Ok(ExperimentReport {
         result: serde_json::json!({
             "track": track_name,
             "track_hash": thash,
+            "replays_imported": replays_imported,
             "map_hash": parsed.source_hash,
             "gbx_hash": gbx_hash,
             "tmx": row.tmx,

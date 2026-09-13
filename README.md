@@ -27,7 +27,8 @@ export OPENROUTER_API_KEY=...            # optional; without it the scripted bra
 ./target/release/rti map import 356566   # or a TMX URL, or a local .Map.Gbx
 ./target/release/rti search tmx356566_how_to_map --method beam
 
-# human runs from the real game (autosaved PB replays → exact inputs)
+# human runs: local autosaved PB replays or TMX leaderboard replays → exact inputs
+./target/release/rti replay import tmx:231384          # rti map import also pulls the top TMX replays
 ./target/release/rti replay import ~/.steam/root/steamapps/compatdata/2225070/pfx/drive_c/users/steamuser/Documents/Trackmania/Replays/Autosaves/*.Replay.Gbx
 ./target/release/rti replay watch --every 10
 

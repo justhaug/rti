@@ -1,0 +1,373 @@
+name = "taizan"
+description = 'Imported from TM2020 map "WWC - Taizan" by zzhou04 (1483 blocks, 12 chained, convention origin_cell=false yaw_sign=1)'
+checkpoints = [21]
+max_ticks = 12822
+tm_map_uid = "1mD4jk0GtFrnLB0w88aE_EF0DRh"
+tm_map_file = "RTI/taizan.Map.Gbx"
+walls = true
+
+[[nodes]]
+x = 1328.0
+y = 768.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1328.0
+y = 784.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1328.0
+y = 800.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1327.5894
+y = 838.26526
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1326.3645
+y = 844.42334
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1324.3462
+y = 850.3688
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1321.5692
+y = 856.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1318.0809
+y = 861.2205
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1313.9412
+y = 865.9411
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1309.2206
+y = 870.08093
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1304.0
+y = 873.5692
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1298.3688
+y = 876.3462
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1292.4233
+y = 878.36444
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1286.2653
+y = 879.58936
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1280.0
+y = 880.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1275.8589
+y = 880.54517
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1272.0
+y = 882.1436
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1268.6863
+y = 884.6863
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1266.1436
+y = 888.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.5452
+y = 891.8589
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 896.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 912.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 928.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 976.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 992.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 1008.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 1024.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1263.4548
+y = 1019.8589
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1261.8564
+y = 1016.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1259.3137
+y = 1012.6863
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1256.0
+y = 1010.1436
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1252.1411
+y = 1008.54517
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1248.0
+y = 1008.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1252.1411
+y = 1008.54517
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1256.0
+y = 1010.1436
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1259.3137
+y = 1012.6863
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1261.8564
+y = 1016.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1263.4548
+y = 1019.8589
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 1024.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 1040.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1264.0
+y = 1056.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1263.4548
+y = 1060.1411
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1261.8564
+y = 1064.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1259.3137
+y = 1067.3137
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1256.0
+y = 1069.8564
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1252.1411
+y = 1071.4548
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1248.0
+y = 1072.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1232.0
+y = 1072.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1216.0
+y = 1072.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1177.7347
+y = 1071.5894
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1171.5767
+y = 1070.3645
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1165.6312
+y = 1068.3462
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1160.0
+y = 1065.5692
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1154.7794
+y = 1062.0809
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1150.0588
+y = 1057.9412
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1145.9191
+y = 1053.2206
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1142.4308
+y = 1048.0
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1139.6538
+y = 1042.3688
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1137.6355
+y = 1036.4233
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1136.4106
+y = 1030.2653
+half_width = 8.0
+surface = "asphalt"
+
+[[nodes]]
+x = 1136.0
+y = 1024.0
+half_width = 8.0
+surface = "asphalt"
