@@ -122,7 +122,7 @@ impl Sim {
             .unwrap_or(loc.surface.index());
         let mut grip_mult = p.surface_grip[si];
         let mut drive_mult = p.surface_drive[si];
-        let mut drag_mult = 1.0;
+        let mut drag_mult = p.surface_drag[si];
         if airborne {
             // no tyre forces in the air
             grip_mult = 0.0;

@@ -3,17 +3,35 @@ use std::path::Path;
 
 use crate::ContentHash;
 
-/// Surface type of a track segment. Grip multipliers live in `PhysicsParams`
-/// so that calibration can learn them.
+/// Driving surface of a track segment. TM2020 blocks are built from a fixed
+/// set of materials with very different handling; each gets its own grip,
+/// drive and drag multipliers in `PhysicsParams`, so calibration can fit
+/// them independently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Surface {
+    /// Concrete / tech road: the reference surface.
     #[default]
     Asphalt,
     Dirt,
     Grass,
     Ice,
+    /// Bumpy road: full grip, but the surface throws the car around.
+    Bump,
+    /// Plastic platform: very high grip, springy.
+    Plastic,
+    /// Water: heavy drag, little grip.
+    Water,
+    Sand,
+    Snow,
+    /// Track walls and metal structures (wall rides).
+    Metal,
+    /// Penalty surface ("sausage"): kills speed.
+    Penalty,
 }
+
+/// Number of distinct surfaces; `PhysicsParams` holds one entry per surface.
+pub const N_SURFACES: usize = 11;
 
 impl Surface {
     pub fn index(self) -> usize {
@@ -22,6 +40,47 @@ impl Surface {
             Surface::Dirt => 1,
             Surface::Grass => 2,
             Surface::Ice => 3,
+            Surface::Bump => 4,
+            Surface::Plastic => 5,
+            Surface::Water => 6,
+            Surface::Sand => 7,
+            Surface::Snow => 8,
+            Surface::Metal => 9,
+            Surface::Penalty => 10,
+        }
+    }
+
+    pub fn from_index(i: usize) -> Surface {
+        Surface::ALL[i.min(N_SURFACES - 1)]
+    }
+
+    pub const ALL: [Surface; N_SURFACES] = [
+        Surface::Asphalt,
+        Surface::Dirt,
+        Surface::Grass,
+        Surface::Ice,
+        Surface::Bump,
+        Surface::Plastic,
+        Surface::Water,
+        Surface::Sand,
+        Surface::Snow,
+        Surface::Metal,
+        Surface::Penalty,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Surface::Asphalt => "asphalt",
+            Surface::Dirt => "dirt",
+            Surface::Grass => "grass",
+            Surface::Ice => "ice",
+            Surface::Bump => "bump",
+            Surface::Plastic => "plastic",
+            Surface::Water => "water",
+            Surface::Sand => "sand",
+            Surface::Snow => "snow",
+            Surface::Metal => "metal",
+            Surface::Penalty => "penalty",
         }
     }
 }

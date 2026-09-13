@@ -242,6 +242,17 @@ pub fn decode_inputs(
     (out, warnings)
 }
 
+/// Sign relating the game's steering axis to the simulator's (positive =
+/// counter-clockwise in the planar frame). Dropping TM2020's vertical axis to
+/// build the (x, z) plane mirrors the world, so the two conventions differ.
+/// `RTI_STEER_SIGN` overrides it for experiments.
+pub fn steer_sign() -> f32 {
+    std::env::var("RTI_STEER_SIGN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0)
+}
+
 /// Expand timed events into a per-tick action sequence of `ticks` length.
 /// Steering is mapped from [-127, 127] to [-1, 1]. Ticks before the race
 /// start (negative times) are dropped.
@@ -253,7 +264,7 @@ pub fn inputs_to_actions(inputs: &[TimedInput], ticks: u32) -> Vec<Action> {
         let time = t as i32 * 10;
         while idx < inputs.len() && inputs[idx].time_ms <= time {
             match inputs[idx].event {
-                InputEvent::Steer { value } => cur.steer = value as f32 / 127.0,
+                InputEvent::Steer { value } => cur.steer = value as f32 / 127.0 * steer_sign(),
                 InputEvent::Accelerate { on } => cur.gas = on,
                 InputEvent::Brake { on } => cur.brake = on,
                 _ => {}

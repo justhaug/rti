@@ -122,9 +122,12 @@ pub struct Resolved {
 pub const DEFAULT_CATALOG: &str = r#"
 # Overrides (regex on the full block name) take precedence over the grammar.
 # Family token → surface; the first matching token wins.
+# Family token -> surface material; the first matching token in the block name wins,
+# so order matters (a "RoadIce" block is ice even though it is also a road).
 surfaces = [
-  ["Ice", "ice"], ["Snow", "dirt"], ["Dirt", "dirt"], ["Grass", "grass"], ["Rally", "dirt"],
-  ["Tech", "asphalt"], ["Bump", "asphalt"], ["Plastic", "asphalt"], ["Desert", "asphalt"], ["Water", "asphalt"],
+  ["Ice", "ice"], ["Snow", "snow"], ["Dirt", "dirt"], ["Rally", "dirt"], ["Grass", "grass"],
+  ["Water", "water"], ["Plastic", "plastic"], ["Bump", "bump"], ["Desert", "sand"], ["Sand", "sand"],
+  ["Penalty", "penalty"], ["Metal", "metal"], ["TrackWall", "metal"], ["Tech", "asphalt"],
 ]
 ignore_tokens = ["Wall", "Pillar", "Loop", "Deadend", "Structure", "Land", "Tree", "Cliff", "Beach",
   "Canopy", "Stand", "Fence", "Sign", "Screen", "Light", "Trigger", "Arrow", "Pipe", "Tunnel",
@@ -253,6 +256,31 @@ impl Catalog {
             }
         }
         Surface::Asphalt
+    }
+
+    /// True when the block belongs to a drivable family (road, platform,
+    /// gate) even if we cannot model its exact shape. Such blocks still
+    /// occupy drivable ground, so the compiler gives them a flat patch
+    /// rather than leaving a hole in the surface.
+    pub fn is_drivable_family(&self, name: &str) -> bool {
+        let toks = tokens(name);
+        if toks
+            .iter()
+            .any(|t| self.ignore_tokens.iter().any(|i| t == i))
+        {
+            // walls, pillars, structures and scenery are not ground...
+            // except wall rides and loops, which are drivable but unshaped
+            if !(toks.iter().any(|t| t == "Loop")
+                || (toks.iter().any(|t| t == "Wall")
+                    && toks
+                        .iter()
+                        .any(|t| t == "Track" || t == "Road" || t == "Platform")))
+            {
+                return false;
+            }
+        }
+        toks.iter()
+            .any(|t| t == "Road" || t == "Platform" || t == "Gate")
     }
 
     pub fn resolve(&self, name: &str) -> Option<Resolved> {

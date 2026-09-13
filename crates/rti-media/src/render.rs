@@ -14,6 +14,29 @@ pub type Rgb = [u8; 3];
 
 pub const BG: Rgb = [14, 16, 22];
 pub const ASPHALT: Rgb = [58, 66, 80];
+pub const PLASTIC: Rgb = [120, 90, 160];
+pub const WATER: Rgb = [40, 90, 150];
+pub const SAND: Rgb = [170, 150, 100];
+pub const SNOW: Rgb = [210, 215, 225];
+pub const METAL: Rgb = [110, 115, 125];
+pub const PENALTY: Rgb = [150, 60, 60];
+pub const BUMP: Rgb = [80, 74, 70];
+
+pub fn surface_colour(s: rti_core::Surface) -> Rgb {
+    match s {
+        rti_core::Surface::Asphalt => ASPHALT,
+        rti_core::Surface::Dirt => DIRT,
+        rti_core::Surface::Grass => GRASS,
+        rti_core::Surface::Ice => ICE,
+        rti_core::Surface::Bump => BUMP,
+        rti_core::Surface::Plastic => PLASTIC,
+        rti_core::Surface::Water => WATER,
+        rti_core::Surface::Sand => SAND,
+        rti_core::Surface::Snow => SNOW,
+        rti_core::Surface::Metal => METAL,
+        rti_core::Surface::Penalty => PENALTY,
+    }
+}
 pub const DIRT: Rgb = [110, 86, 52];
 pub const GRASS: Rgb = [46, 90, 52];
 pub const ICE: Rgb = [90, 150, 190];
@@ -249,12 +272,7 @@ impl World {
                         world.img.line(ax, ay, bx, by, hw * 2.0 + 3.0, WALL, 1.0);
                     }
                 } else {
-                    let c = match a.surface {
-                        rti_core::Surface::Asphalt => ASPHALT,
-                        rti_core::Surface::Dirt => DIRT,
-                        rti_core::Surface::Grass => GRASS,
-                        rti_core::Surface::Ice => ICE,
-                    };
+                    let c = surface_colour(a.surface);
                     world.img.line(ax, ay, bx, by, hw * 2.0, c, 1.0);
                 }
             }

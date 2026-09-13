@@ -1,6 +1,38 @@
 use serde::{Deserialize, Serialize};
 
+use crate::track::{Surface, N_SURFACES};
+
+/// Scalar parameter names, in `to_vec` order.
+pub const SCALAR_NAMES: [&str; 19] = [
+    "engine_accel",
+    "engine_falloff_speed",
+    "brake_decel",
+    "drag",
+    "rolling",
+    "grip",
+    "steer_max",
+    "steer_speed_falloff",
+    "steer_rate",
+    "wheelbase",
+    "slide_damping",
+    "slip_onset",
+    "offtrack_grip",
+    "offtrack_drag",
+    "wall_restitution",
+    "max_speed",
+    "drive_tau",
+    "downforce",
+    "landing_keep",
+];
+
+/// Per-surface parameter groups, in `to_vec` order after the scalars.
+pub const SURFACE_GROUPS: [&str; 3] = ["surface_grip", "surface_drive", "surface_drag"];
 use crate::ContentHash;
+
+fn default_surface_drag() -> [f32; N_SURFACES] {
+    // asphalt dirt grass ice bump plastic water sand snow metal penalty
+    [1.0, 1.3, 1.6, 1.0, 1.2, 1.0, 6.0, 2.2, 1.4, 1.0, 9.0]
+}
 
 /// Every tunable constant of the replicated physics. The calibration loop
 /// treats this as a flat vector (`to_vec`/`from_vec`) so that any search
@@ -20,10 +52,13 @@ pub struct PhysicsParams {
     pub rolling: f32,
     /// Maximum lateral acceleration on asphalt (m/s^2).
     pub grip: f32,
-    /// Grip multiplier per surface [asphalt, dirt, grass, ice].
-    pub surface_grip: [f32; 4],
+    /// Lateral grip multiplier per surface (index = `Surface::index`).
+    pub surface_grip: [f32; N_SURFACES],
     /// Longitudinal (engine/brake) multiplier per surface.
-    pub surface_drive: [f32; 4],
+    pub surface_drive: [f32; N_SURFACES],
+    /// Extra drag multiplier per surface (water and sand slow the car).
+    #[serde(default = "default_surface_drag")]
+    pub surface_drag: [f32; N_SURFACES],
     /// Max steering angle (radians) at standstill.
     pub steer_max: f32,
     /// Steering angle shrinks with speed: steer_max / (1 + speed / steer_speed_falloff).
@@ -70,8 +105,12 @@ impl Default for PhysicsParams {
             drag: 0.0009,
             rolling: 1.1,
             grip: 23.8,
-            surface_grip: [1.67, 1.07, 0.43, 0.093],
-            surface_drive: [2.54, 1.07, 0.81, 0.62],
+            //             asphalt dirt grass  ice  bump plastic water sand snow metal penalty
+            surface_grip: [
+                1.67, 1.07, 0.43, 0.093, 1.45, 1.9, 0.35, 0.55, 0.5, 1.2, 0.6,
+            ],
+            surface_drive: [2.54, 1.07, 0.81, 0.62, 2.2, 2.8, 0.5, 0.7, 0.6, 2.0, 0.3],
+            surface_drag: default_surface_drag(),
             steer_max: 0.49,
             steer_speed_falloff: 17.7,
             steer_rate: 10.4,
@@ -90,43 +129,23 @@ impl Default for PhysicsParams {
 }
 
 impl PhysicsParams {
-    pub const VERSION: u32 = 2;
+    pub const VERSION: u32 = 3;
 
     pub fn hash(&self) -> ContentHash {
         ContentHash::of_json(self)
     }
 
     /// Names of the flat parameter vector, in `to_vec` order.
-    pub fn names() -> Vec<&'static str> {
-        vec![
-            "engine_accel",
-            "engine_falloff_speed",
-            "brake_decel",
-            "drag",
-            "rolling",
-            "grip",
-            "surface_grip.asphalt",
-            "surface_grip.dirt",
-            "surface_grip.grass",
-            "surface_grip.ice",
-            "surface_drive.asphalt",
-            "surface_drive.dirt",
-            "surface_drive.grass",
-            "surface_drive.ice",
-            "steer_max",
-            "steer_speed_falloff",
-            "steer_rate",
-            "wheelbase",
-            "slide_damping",
-            "slip_onset",
-            "offtrack_grip",
-            "offtrack_drag",
-            "wall_restitution",
-            "max_speed",
-            "drive_tau",
-            "downforce",
-            "landing_keep",
-        ]
+    /// Names of the flat parameter vector, in `to_vec` order: scalars first,
+    /// then the per-surface arrays (grip, drive, drag).
+    pub fn names() -> Vec<String> {
+        let mut v: Vec<String> = SCALAR_NAMES.iter().map(|s| s.to_string()).collect();
+        for (group, _) in SURFACE_GROUPS.iter().enumerate() {
+            for s in Surface::ALL {
+                v.push(format!("{}.{}", SURFACE_GROUPS[group], s.name()));
+            }
+        }
+        v
     }
 
     pub fn to_vec(&self) -> Vec<f32> {
@@ -137,10 +156,6 @@ impl PhysicsParams {
             self.drag,
             self.rolling,
             self.grip,
-        ];
-        v.extend_from_slice(&self.surface_grip);
-        v.extend_from_slice(&self.surface_drive);
-        v.extend_from_slice(&[
             self.steer_max,
             self.steer_speed_falloff,
             self.steer_rate,
@@ -154,16 +169,26 @@ impl PhysicsParams {
             self.drive_tau,
             self.downforce,
             self.landing_keep,
-        ]);
+        ];
+        v.extend_from_slice(&self.surface_grip);
+        v.extend_from_slice(&self.surface_drive);
+        v.extend_from_slice(&self.surface_drag);
         v
     }
 
     pub fn from_vec(v: &[f32]) -> anyhow::Result<Self> {
+        let n = SCALAR_NAMES.len();
         anyhow::ensure!(
-            (25..=27).contains(&v.len()),
-            "expected 25-27 params, got {}",
+            v.len() == n + 3 * N_SURFACES,
+            "expected {} params, got {}",
+            n + 3 * N_SURFACES,
             v.len()
         );
+        let arr = |k: usize| -> [f32; N_SURFACES] {
+            let mut a = [0.0; N_SURFACES];
+            a.copy_from_slice(&v[n + k * N_SURFACES..n + (k + 1) * N_SURFACES]);
+            a
+        };
         Ok(PhysicsParams {
             engine_accel: v[0],
             engine_falloff_speed: v[1],
@@ -171,21 +196,22 @@ impl PhysicsParams {
             drag: v[3],
             rolling: v[4],
             grip: v[5],
-            surface_grip: [v[6], v[7], v[8], v[9]],
-            surface_drive: [v[10], v[11], v[12], v[13]],
-            steer_max: v[14],
-            steer_speed_falloff: v[15],
-            steer_rate: v[16],
-            wheelbase: v[17],
-            slide_damping: v[18].clamp(0.0, 1.0),
-            slip_onset: v[19],
-            offtrack_grip: v[20],
-            offtrack_drag: v[21],
-            wall_restitution: v[22].clamp(0.0, 1.0),
-            max_speed: v[23],
-            drive_tau: v[24].max(0.01),
-            downforce: v.get(25).copied().unwrap_or(0.0).max(0.0),
-            landing_keep: v.get(26).copied().unwrap_or(0.97).clamp(0.5, 1.0),
+            steer_max: v[6],
+            steer_speed_falloff: v[7],
+            steer_rate: v[8],
+            wheelbase: v[9],
+            slide_damping: v[10].clamp(0.0, 1.0),
+            slip_onset: v[11],
+            offtrack_grip: v[12],
+            offtrack_drag: v[13],
+            wall_restitution: v[14].clamp(0.0, 1.0),
+            max_speed: v[15],
+            drive_tau: v[16].max(0.01),
+            downforce: v[17].max(0.0),
+            landing_keep: v[18].clamp(0.5, 1.0),
+            surface_grip: arr(0),
+            surface_drive: arr(1),
+            surface_drag: arr(2),
         })
     }
 

@@ -53,6 +53,13 @@ pub fn policy_rollout(
         offtrack_ticks: s.offtrack_ticks,
         wall_hits: s.wall_hits,
     };
+    let stop = if s.finished {
+        rti_sim::StopReason::Finished
+    } else if s.tick >= max_ticks {
+        rti_sim::StopReason::TickLimit
+    } else {
+        rti_sim::StopReason::InputsExhausted
+    };
     (
         actions,
         Rollout {
@@ -60,6 +67,7 @@ pub fn policy_rollout(
             final_state: s,
             states,
             ticks,
+            stop,
         },
     )
 }

@@ -146,3 +146,63 @@ fit drives top speed down to 116 km/h to match a handful of short maps, and make
    the speed profile identifiable without needing the exact line.
 3. **Real-game verification.** The oracle bridge (`docs/oracle.md`) replays inputs in TM2020 and
    returns per-tick positions; that turns this from an inference problem into a measurement.
+
+
+## Surfaces
+
+TM2020 blocks are built from materials that handle very differently, so `Surface` covers all of
+them rather than four: asphalt (concrete/tech), dirt, grass, ice, bump, plastic, water, sand,
+snow, metal (track walls and wall rides) and penalty. `PhysicsParams` holds a grip, a drive and a
+drag multiplier **per surface** (`surface_grip`, `surface_drive`, `surface_drag`), all in the
+flat parameter vector so calibration fits them independently. The catalog maps family tokens to
+materials in order, so `RoadIce` is ice, `PlatformPlastic` is plastic, `RoadBump` is bump,
+`RoadWater` is water, `SnowRoad` is snow and `DesertRoad` is sand.
+
+## Two routers, and how routes are judged without physics
+
+`replaybench` measures the car; it cannot tell a physics error from a wrong route. `routecheck`
+separates the two using only the replay's checkpoint split times: for a correct route the fraction
+of the distance reached at checkpoint *k* tracks the fraction of the time elapsed, and a route
+that takes a wrong branch or mirrors a turn diverges. It involves no simulation at all.
+
+Measured over the 126-replay corpus:
+
+| router | routes with a complete start-to-finish route and checkpoints | deviation under 0.05 |
+|---|---|---|
+| block chaining (default) | 5 | 2 |
+| surface routing (`--routed`) | 6 | 0 |
+
+`compile_track_routed` is the second one: rasterise every block we can shape, give the rest of the
+drivable families a flat patch, then take the shortest path over the heightfield from the start
+block through the checkpoints to the finish. It removes the "one unmodelled block breaks the
+chain" failure but currently produces worse routes, so block chaining stays the default. Its
+remaining problems are known: 28 maps have no recognised start block, and 47 have no connected
+surface path from the start.
+
+## What was ruled out
+
+Each of these was a plausible cause of the low finish rate and was tested and eliminated:
+
+* **Steering sign.** Dropping TM2020's vertical axis mirrors the plane, so the sign was suspect.
+  Flipping it drops finishes from 8 to 3, so the current convention is right.
+* **Corridor too narrow.** Widening the guaranteed-drivable corridor by 8 m and by 20 m does not
+  raise the finish count.
+* **Holes from unmodelled blocks.** Giving every unshaped block of a drivable family a flat patch
+  changes nothing measurable.
+
+The remaining causes, from the stop-reason breakdown of the 60 usable runs (fell 22, stuck on
+walls 19, finished 8, tick limit 6, inputs exhausted 5), are wrong routes and wrong block shapes.
+
+## Why "exact" needs the game
+
+Two sources of ground truth exist and both are currently closed:
+
+* **The game's own collision meshes.** `Packs/Stadium.pak` in the install is an encrypted NadeoPak
+  (version 18), so block shapes cannot be read off disk.
+* **Measurement through Openplanet.** The bridge plugin is written and installed
+  (`deploy/openplanet/RTIBridge`), but the Openplanet binary states that full permissions require
+  the Club Edition of Trackmania, which is what unsigned plugins need. `DeveloperMode=true` is now
+  set in the prefix's `Settings.ini` (backed up alongside) in case that is enough on its own.
+
+Until one of those opens, every geometry error is only visible indirectly, through the two
+instruments above.

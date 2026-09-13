@@ -94,10 +94,15 @@ replayed in the simulator on the compiled map and compared with the real finish 
 (`rti experiment '{"kind":"replay_bench"}'`, or `cargo run --release -p rti-maps --example
 replaybench -- <maps> <replays>`).
 
-Current state on 126 replays: 60 routes compile to a plausible length, the simulator carries 8 of
-them to the finish, 3 within 25 % of the real time, median error 5.2 s. Block-shape coverage, not
-the physics constants, is what limits this; `docs/maps.md` has the diagnosis and the three ways
-forward.
+Two instruments measure it. `replaybench` runs the car; `routecheck` judges the compiled route on
+its own, with no simulation, by comparing where the checkpoints fall along the route with when the
+human reached them.
+
+Current state on 126 replays: 60 routes have a plausible length, the simulator carries 8 to the
+finish, 3 within 25 %, median error 5.2 s; and only 5 maps produce a complete route with
+checkpoints at all. Route and block-shape coverage, not the physics constants, is the limit.
+`docs/maps.md` records what was tested and eliminated (steering sign, corridor width, surface
+holes) and why exactness needs the game itself.
 
 ## Status
 

@@ -821,6 +821,17 @@ pub fn compile_track3_full(
     // loops, diagonals, transitions) leave no hole in the surface. Real piece
     // geometry is layered on top of it.
     let mut patches: Vec<rti_sim::Patch> = corridor_patches(&t);
+    // Blocks of a drivable family whose shape we cannot model (diagonals,
+    // loops, wall rides, gameplay specials) still occupy ground: give them a
+    // flat cell-sized patch so they do not punch holes in the surface.
+    if std::env::var("RTI_NO_FLAT_FALLBACK").is_err() {
+        patches.extend(
+            map.blocks
+                .iter()
+                .filter(|b| cat.resolve(&b.name).is_none() && cat.is_drivable_family(&b.name))
+                .map(|b| flat_patch(b, cat)),
+        );
+    }
     patches.extend(pieces.iter().enumerate().map(|(i, p)| p.patch(i as u32)));
     // Only markers on the chained route count: a map may hold checkpoint or
     // finish blocks belonging to other routes or to unused scenery.
@@ -1058,6 +1069,266 @@ fn compile_inner(
         pieces,
         ch.seq.iter().map(|&(pi, _, _)| pi).collect(),
     ))
+}
+
+/// Compile a map by routing over the drivable surface instead of chaining
+/// blocks port to port: place every piece we can shape, give the rest of the
+/// drivable families a flat patch, rasterise, then find the shortest surface
+/// path from the start block through the checkpoints to the finish. Blocks
+/// whose shape we do not model no longer break the route.
+pub fn compile_track_routed(
+    map: &ParsedMap,
+    cat: &Catalog,
+    name: &str,
+) -> anyhow::Result<(Track, CompileReport, rti_sim::World, Vec<(u32, u8)>)> {
+    let mut report = CompileReport {
+        blocks_total: map.blocks.len(),
+        ..Default::default()
+    };
+    let mut unrec: HashMap<String, usize> = HashMap::new();
+    for b in &map.blocks {
+        if cat.resolve(&b.name).is_some() {
+            report.blocks_recognized += 1;
+        } else {
+            *unrec.entry(b.name.clone()).or_default() += 1;
+        }
+    }
+    let mut u: Vec<(String, usize)> = unrec.into_iter().collect();
+    u.sort_by_key(|a| std::cmp::Reverse(a.1));
+    u.truncate(30);
+    report.unrecognized = u;
+    report.convention = "surface routing".into();
+
+    let pieces: Vec<Piece> = map
+        .blocks
+        .iter()
+        .filter_map(|b| place(b, cat, false, 1.0))
+        .collect();
+    anyhow::ensure!(!pieces.is_empty(), "no recognised drivable blocks in map");
+    let mut patches: Vec<rti_sim::Patch> = map
+        .blocks
+        .iter()
+        .filter(|b| cat.resolve(&b.name).is_none() && cat.is_drivable_family(&b.name))
+        .map(|b| flat_patch(b, cat))
+        .collect();
+    patches.extend(pieces.iter().enumerate().map(|(i, p)| p.patch(i as u32)));
+    let world = rti_sim::World::from_patches(&patches);
+    anyhow::ensure!(!world.is_empty(), "no drivable surface");
+
+    let surf = crate::route::Surface::new(&world);
+    let find = |m: Marker| -> Vec<usize> {
+        pieces
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.marker == Some(m))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    let mut starts = find(Marker::Start);
+    starts.extend(find(Marker::StartFinish));
+    let finishes: Vec<usize> = find(Marker::Finish)
+        .into_iter()
+        .chain(find(Marker::StartFinish))
+        .collect();
+    let cps = find(Marker::Checkpoint);
+    anyhow::ensure!(!starts.is_empty(), "no start block");
+    anyhow::ensure!(!finishes.is_empty(), "no finish block");
+    report.start_found = true;
+
+    let nodes_of = |ids: &[usize]| -> Vec<Vec<crate::route::NodeId>> {
+        ids.iter()
+            .map(|&i| {
+                let p = &pieces[i];
+                let c = (
+                    p.centre.0,
+                    p.centre.1,
+                    p.port_h.first().copied().unwrap_or(p.y),
+                );
+                surf.nodes_of_piece(i as u32, c, 20.0)
+            })
+            .collect()
+    };
+    let start_nodes: Vec<crate::route::NodeId> = nodes_of(&starts).concat();
+    let finish_sets = nodes_of(&finishes);
+    let cp_sets = nodes_of(&cps);
+
+    // start → nearest unvisited checkpoint → ... → finish
+    let mut path: Vec<(f32, f32, f32)> = vec![];
+    let mut cur = start_nodes.clone();
+    let mut left: Vec<usize> = (0..cp_sets.len())
+        .filter(|&i| !cp_sets[i].is_empty())
+        .collect();
+    let mut markers: Vec<(u32, u8)> = vec![];
+    let mut cp_indices: Vec<usize> = vec![];
+    while !left.is_empty() {
+        let mut best: Option<(usize, Vec<(f32, f32, f32)>)> = None;
+        for &i in &left {
+            if let Some(p) = surf.path(&cur, &cp_sets[i]) {
+                if best
+                    .as_ref()
+                    .map(|(_, bp)| p.len() < bp.len())
+                    .unwrap_or(true)
+                {
+                    best = Some((i, p));
+                }
+            }
+        }
+        match best {
+            Some((i, p)) => {
+                cur = cp_sets[i].clone();
+                extend_path(&mut path, &p);
+                cp_indices.push(path.len().saturating_sub(1));
+                markers.push((cps[i] as u32, 1));
+                left.retain(|&x| x != i);
+            }
+            None => break,
+        }
+    }
+    report.checkpoints = markers.len();
+    let mut finish_at = None;
+    let mut best_fin: Option<(usize, Vec<(f32, f32, f32)>)> = None;
+    for (k, set) in finish_sets.iter().enumerate() {
+        if let Some(p) = surf.path(&cur, set) {
+            if best_fin
+                .as_ref()
+                .map(|(_, bp)| p.len() < bp.len())
+                .unwrap_or(true)
+            {
+                best_fin = Some((k, p));
+            }
+        }
+    }
+    if let Some((k, p)) = best_fin {
+        extend_path(&mut path, &p);
+        finish_at = Some(path.len().saturating_sub(1));
+        markers.push((finishes[k] as u32, 2));
+        report.finish_found = true;
+    }
+    anyhow::ensure!(
+        path.len() >= 2,
+        "no route over the drivable surface from the start block"
+    );
+
+    let thin = crate::route::simplify(&path, 6.0);
+    // map checkpoint/finish path indices onto the thinned polyline
+    let remap = |i: usize| -> usize {
+        let p = path[i.min(path.len() - 1)];
+        thin.iter()
+            .enumerate()
+            .min_by(|a, b| {
+                let da = (a.1 .0 - p.0).powi(2) + (a.1 .1 - p.1).powi(2);
+                let db = (b.1 .0 - p.0).powi(2) + (b.1 .1 - p.1).powi(2);
+                da.partial_cmp(&db).unwrap()
+            })
+            .map(|(k, _)| k)
+            .unwrap_or(0)
+    };
+    let checkpoints: Vec<usize> = cp_indices.iter().map(|&i| remap(i)).collect();
+    let finish = finish_at.map(remap);
+
+    let nodes: Vec<TrackNode> = thin
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, z, y))| {
+            // heading along the path, to measure the drivable width across it
+            let j = (i + 1).min(thin.len() - 1);
+            let k = i.saturating_sub(1);
+            let (dx, dz) = (thin[j].0 - thin[k].0, thin[j].1 - thin[k].1);
+            let l = (dx * dx + dz * dz).sqrt().max(1e-3);
+            let (nx, nz) = (-dz / l, dx / l);
+            let mut half = 1.0f32;
+            while half < 24.0 {
+                let a = world.layer_below(x + nx * (half + 1.0), z + nz * (half + 1.0), y, 2.0);
+                let b = world.layer_below(x - nx * (half + 1.0), z - nz * (half + 1.0), y, 2.0);
+                if a.is_none() || b.is_none() {
+                    break;
+                }
+                half += 1.0;
+            }
+            let surface = world
+                .layer_below(x, z, y, 2.0)
+                .map(|l| rti_sim::world::surface_from(l.surface))
+                .unwrap_or(Surface::Asphalt);
+            TrackNode {
+                x,
+                y: z,
+                h: y,
+                half_width: half.max(4.0),
+                surface,
+            }
+        })
+        .collect();
+
+    let mut track = Track {
+        name: name.to_string(),
+        description: format!(
+            "Routed over the drivable surface of TM2020 map {:?} ({} blocks, {} recognised)",
+            map.info.name,
+            map.blocks.len(),
+            report.blocks_recognized
+        ),
+        nodes,
+        checkpoints,
+        finish,
+        max_ticks: if map.info.author_ms > 0 {
+            ((map.info.author_ms / 10) * 3).max(3000)
+        } else {
+            12_000
+        },
+        tm_map_uid: Some(map.info.uid.clone()),
+        world_hash: None,
+        markers: markers.clone(),
+        tm_map_file: Some(format!("RTI/{name}.Map.Gbx")),
+        tm_frame: None,
+        walls: true,
+    };
+    track.checkpoints.sort_unstable();
+    track.checkpoints.dedup();
+    if let Some(f) = track.finish {
+        track.checkpoints.retain(|&c| c < f);
+    }
+    report.blocks_chained = markers.len() + 1;
+    report.length_m = track.length();
+    track.validate()?;
+    Ok((track, report, world, markers))
+}
+
+fn extend_path(path: &mut Vec<(f32, f32, f32)>, add: &[(f32, f32, f32)]) {
+    for (i, &p) in add.iter().enumerate() {
+        if i == 0 && !path.is_empty() {
+            continue;
+        }
+        path.push(p);
+    }
+}
+
+/// A flat cell-sized drivable patch at a block's own height, for blocks of a
+/// drivable family whose exact shape we do not model.
+fn flat_patch(block: &MapBlock, cat: &Catalog) -> rti_sim::Patch {
+    let (cx, cz) = if block.free {
+        block.free_pos.map(|p| (p[0], p[2])).unwrap_or((0.0, 0.0))
+    } else {
+        (
+            block.coord[0] as f32 * CELL + CELL / 2.0,
+            block.coord[2] as f32 * CELL + CELL / 2.0,
+        )
+    };
+    let y = block
+        .free_pos
+        .map(|p| p[1])
+        .unwrap_or(block.coord[1] as f32 * 8.0);
+    let surf = cat
+        .surface_for_tokens(&crate::catalog::tokens(&block.name))
+        .index() as u8;
+    let h = CELL / 2.0;
+    rti_sim::world::rasterize(cx - h, cz - h, cx + h, cz + h, move |_x, _z| {
+        Some(rti_sim::Layer {
+            y,
+            surface: surf,
+            kind: 1,
+            piece: u32::MAX,
+        })
+    })
 }
 
 /// Rasterise a drivable corridor along the track polyline: a road-kind

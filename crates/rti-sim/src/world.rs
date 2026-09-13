@@ -196,12 +196,7 @@ impl World {
 }
 
 pub fn surface_from(i: u8) -> Surface {
-    match i {
-        1 => Surface::Dirt,
-        2 => Surface::Grass,
-        3 => Surface::Ice,
-        _ => Surface::Asphalt,
-    }
+    Surface::from_index(i as usize)
 }
 
 /// Helper to build a patch from a closure over world-space sample centres.

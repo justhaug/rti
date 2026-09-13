@@ -3,6 +3,20 @@ use rti_core::{Action, CarState, RunResult, Trajectory};
 
 use crate::physics::Sim;
 
+/// Why a rollout stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopReason {
+    Finished,
+    /// The action sequence ran out (the sim was slower than the driver).
+    InputsExhausted,
+    /// Near-stationary for `STUCK_TICKS` (wall grind, wrong way, no drive).
+    Stuck,
+    /// Fell far below the last surface it was grounded on.
+    Fell,
+    /// Hit the track's tick budget.
+    TickLimit,
+}
+
 /// Output of one rollout.
 #[derive(Clone, Debug)]
 pub struct Rollout {
@@ -10,6 +24,7 @@ pub struct Rollout {
     pub final_state: CarState,
     pub states: Vec<CarState>,
     pub ticks: u64,
+    pub stop: StopReason,
 }
 
 /// Run `actions` from `init`. Stops at finish / DNF / stuck / `max_ticks`,
@@ -91,11 +106,26 @@ pub fn rollout_with(
         offtrack_ticks: s.offtrack_ticks - init.offtrack_ticks,
         wall_hits: s.wall_hits - init.wall_hits,
     };
+    let stop = if s.finished {
+        StopReason::Finished
+    } else if s.stuck_ticks >= crate::physics::STUCK_TICKS {
+        StopReason::Stuck
+    } else if sim.geom.world.is_some()
+        && s.air_ticks > 0
+        && s.h < s.ground_h - crate::physics::FALL_LIMIT_M
+    {
+        StopReason::Fell
+    } else if s.tick >= max_ticks {
+        StopReason::TickLimit
+    } else {
+        StopReason::InputsExhausted
+    };
     Rollout {
         result,
         final_state: s,
         states,
         ticks,
+        stop,
     }
 }
 

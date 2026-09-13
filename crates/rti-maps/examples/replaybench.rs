@@ -147,6 +147,7 @@ fn main() -> anyhow::Result<()> {
             ro.result.wall_hits,
             split_errs,
             err,
+            ro.stop,
         ));
     }
     rows.sort_by(|a, b| b.2.cmp(&a.2).then(b.3.cmp(&a.3)));
@@ -226,6 +227,28 @@ fn main() -> anyhow::Result<()> {
         .collect();
     u_errs.sort();
     println!("\nreplays {}: maps compiled start-to-finish {}, sim finished {} (within 10%: {}), median |error| {} ms", rows.len(), compiled_full, finished, within10, med);
+    if args.iter().any(|a| a == "--stops") {
+        let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+        for r in &usable {
+            *by.entry(format!("{:?}", r.12)).or_default() += 1;
+        }
+        println!("usable stop reasons: {by:?}");
+        for r in usable
+            .iter()
+            .filter(|r| format!("{:?}", r.12) != "Finished")
+        {
+            println!(
+                "  {:<8} {:?} at {:>6.0}/{:.0} m ({:>3.0}%) real {:>6} ms walls {:>5}",
+                r.0,
+                r.12,
+                r.8,
+                r.4,
+                r.8 / r.4 * 100.0,
+                r.5,
+                r.9
+            );
+        }
+    }
     if args.iter().any(|a| a == "--usable") {
         for r in &usable {
             println!("usable {:<8} chain {:>4} finish {:<3} len {:>6.0} real {:>7} sim {:>7} prog {:>6.0} walls {:>5}", r.0, r.3, if r.2 { "yes" } else { "no" }, r.4, r.5, if r.6 { r.7.to_string() } else { "DNF".into() }, r.8, r.9);

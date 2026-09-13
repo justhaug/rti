@@ -19,6 +19,7 @@ pub mod container;
 pub mod gbx;
 pub mod reader;
 pub mod replay;
+pub mod route;
 pub mod shape3d;
 pub mod tmx;
 
