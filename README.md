@@ -31,6 +31,29 @@ export OPENROUTER_API_KEY=...            # optional; without it the scripted bra
 ./target/release/rti serve --port 8787
 ```
 
+## Videos: the public research journal
+
+When a verified best clears the interestingness threshold, RTI renders a 9:16 Short
+(new run, previous best with the new run as ghost, slow-motion "why it works", the difference
+card), writes the title and description from the archive lineage, and shows it in the UI as a
+**POTENTIAL DISCOVERY** card with Publish / Upload private / Ignore. Nothing is posted without your
+click unless you enable `auto_publish`. Needs ffmpeg; YouTube needs OAuth env vars. See
+`docs/media.md`.
+
+```bash
+./target/release/rti media candidates --all     # what would be rendered and why
+./target/release/rti media scan --all           # render everything above threshold
+./target/release/rti media publish <id>         # upload (private) then set public
+```
+
+## Running it in the cloud
+
+`docs/deploy.md`: a cheap always-on Fly Machine (or any Linux VM with `deploy/rti.service`)
+runs the researcher, archive, UI and CPU simulation; a Runpod GPU desktop pod holds TM2020 and
+is started/stopped on demand with an independent idle watchdog; artifacts sync to R2/S3.
+`[cloud]` in `rti.toml` holds the budgets (OpenRouter daily/monthly, oracle hours, compute,
+approval threshold). `rti cloud status|oracle start|stop|sync`.
+
 ## The UI (`rti serve`)
 
 One process owns the archive, runs the research loop in the background and serves a JSON API plus
@@ -61,7 +84,8 @@ cargo run --release -p rti-search --example compare -- hairpin 20000000
 ## Status
 
 Bootstrapped harness. Simulator, search, nets, archive, oracle contract, LLM roles, coding
-harness, research loop, map ingestion and the server/UI all run end to end against the
-hidden-sim oracle. Not included: the TM2020 bridge plugin (Openplanet under Proton) — the client
+harness, research loop, map ingestion, media pipeline, cloud lifecycle and the server/UI all run
+end to end against the hidden-sim oracle. The LLM path has been exercised with GLM 5.3 Flash
+(research cycles, operator chat, narration). Not included: the TM2020 bridge plugin (Openplanet under Proton) — the client
 and protocol are (`docs/oracle.md`) — and a full vanilla block catalog: imported TMX maps compile
 to a drivable prefix of the road wherever the catalog runs out (`docs/maps.md`).

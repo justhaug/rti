@@ -39,6 +39,8 @@ rti-agent     coding harness: worktree, builtin tool-loop agent or external comm
 rti-research  Session, context builder, brains (LLM / scripted), experiment runner, cycle, tasks
 rti-maps      Trackmania Exchange client, GBX decoder, block catalog, map → Track compiler
 rti-server    long-running process: JSON API, background loop, operator agent, UI
+rti-media     detect → compare → render → compose → narrate → publish (docs/media.md)
+rti-infra     Fly/Runpod/R2 lifecycle, budget ledger, managed oracle, watchdog (docs/deploy.md)
 rti-cli       `rti` binary
 ```
 

@@ -21,6 +21,8 @@ crates/rti-agent     coding worker harness: worktree, gates, builtin/external ag
 crates/rti-research  the research loop: context → hypothesis → experiment → analysis → findings
 crates/rti-maps      TMX client, GBX (.Map.Gbx) decoder, block catalog, map → Track compiler
 crates/rti-server    `rti serve`: JSON API, background loop, operator agent, single-page UI
+crates/rti-media     interestingness detection, run comparison, simulator renderer, FFmpeg, narration, YouTube
+crates/rti-infra     cloud lifecycle: Runpod/Fly clients, budgets, ManagedOracle, workers, R2 sync, watchdog
 crates/rti-cli       the `rti` binary
 tracks/              track definitions (TOML); docs/ design docs; prompts/ role prompts
 ```
