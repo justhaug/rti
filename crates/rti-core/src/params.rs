@@ -46,6 +46,9 @@ pub struct PhysicsParams {
     pub max_speed: f32,
     /// Drive (gear) engagement time constant in seconds.
     pub drive_tau: f32,
+    /// Aerodynamic downforce: extra lateral grip proportional to speed² (1/m).
+    #[serde(default)]
+    pub downforce: f32,
 }
 
 impl Default for PhysicsParams {
@@ -70,12 +73,13 @@ impl Default for PhysicsParams {
             wall_restitution: 0.55,
             max_speed: 120.0,
             drive_tau: 0.35,
+            downforce: 0.0,
         }
     }
 }
 
 impl PhysicsParams {
-    pub const VERSION: u32 = 1;
+    pub const VERSION: u32 = 2;
 
     pub fn hash(&self) -> ContentHash {
         ContentHash::of_json(self)
@@ -109,6 +113,7 @@ impl PhysicsParams {
             "wall_restitution",
             "max_speed",
             "drive_tau",
+            "downforce",
         ]
     }
 
@@ -135,12 +140,17 @@ impl PhysicsParams {
             self.wall_restitution,
             self.max_speed,
             self.drive_tau,
+            self.downforce,
         ]);
         v
     }
 
     pub fn from_vec(v: &[f32]) -> anyhow::Result<Self> {
-        anyhow::ensure!(v.len() == 25, "expected 25 params, got {}", v.len());
+        anyhow::ensure!(
+            v.len() == 25 || v.len() == 26,
+            "expected 25 or 26 params, got {}",
+            v.len()
+        );
         Ok(PhysicsParams {
             engine_accel: v[0],
             engine_falloff_speed: v[1],
@@ -161,6 +171,7 @@ impl PhysicsParams {
             wall_restitution: v[22].clamp(0.0, 1.0),
             max_speed: v[23],
             drive_tau: v[24].max(0.01),
+            downforce: v.get(25).copied().unwrap_or(0.0).max(0.0),
         })
     }
 

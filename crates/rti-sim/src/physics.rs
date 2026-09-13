@@ -115,7 +115,7 @@ impl Sim {
         let speed = (vf * vf + vl * vl).sqrt();
 
         // --- available grip ---
-        let mut a_max = p.grip * grip_mult;
+        let mut a_max = p.grip * grip_mult + p.downforce * grip_mult * speed * speed;
         if e.downforce > 0.0 {
             a_max += e.downforce * speed * speed;
         }

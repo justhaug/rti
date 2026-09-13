@@ -1543,6 +1543,7 @@ dependencies = [
  "blake3",
  "flate2",
  "lzokay",
+ "rayon",
  "regex",
  "rti-core",
  "rti-sim",

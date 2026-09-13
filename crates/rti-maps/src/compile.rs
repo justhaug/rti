@@ -258,6 +258,8 @@ fn path_through(p: &Piece, a: usize, b: usize) -> Vec<P2> {
 }
 
 const MAX_GAP_CELLS: usize = 3;
+/// Distance from the start block's entry edge to the car's spawn point.
+pub const START_SPAWN_M: f32 = 30.0;
 
 #[derive(Clone, Copy, PartialEq)]
 struct QItem {
@@ -277,6 +279,157 @@ impl PartialOrd for QItem {
     }
 }
 
+/// Result of one Dijkstra stage: path of (piece, entry, exit) ending at a
+/// target piece (its exit chosen as the port opposite the entry), or the
+/// deepest reachable state if no target was reached.
+struct Stage {
+    seq: Vec<(usize, usize, usize)>,
+    reached: bool,
+    gaps: usize,
+    /// state to continue from: (piece, exit port)
+    end: (usize, usize),
+}
+
+fn opposite_port(p: &Piece, entry: usize) -> usize {
+    if p.ports.len() == 2 {
+        1 - entry
+    } else {
+        (0..p.ports.len())
+            .find(|&x| {
+                x != entry && (p.dirs[x].0 * p.dirs[entry].0 + p.dirs[x].1 * p.dirs[entry].1) < -0.5
+            })
+            .unwrap_or(entry)
+    }
+}
+
+/// Dijkstra over (piece, entry port) states. `seeds` are (piece, entry)
+/// states already "inside" a piece; `target` marks pieces that end the stage
+/// (entered through port 0 when they have two ports); `blocked` pieces are
+/// not traversed.
+fn dijkstra(
+    pieces: &[Piece],
+    by_point: &HashMap<(i32, i32), Vec<(usize, usize)>>,
+    seeds: &[(usize, usize)],
+    target: &dyn Fn(usize) -> bool,
+    blocked: &std::collections::HashSet<usize>,
+) -> Stage {
+    let idx = |piece: usize, entry: usize| piece * 16 + entry;
+    let mut dist: HashMap<usize, f32> = HashMap::new();
+    let mut prev: HashMap<usize, (usize, usize, usize)> = HashMap::new();
+    let mut gapc: HashMap<usize, usize> = HashMap::new();
+    let mut heap = BinaryHeap::new();
+    for &(p, e) in seeds {
+        dist.insert(idx(p, e), 0.0);
+        heap.push(QItem {
+            cost: 0.0,
+            piece: p,
+            entry: e,
+        });
+    }
+    let seed_set: std::collections::HashSet<usize> = seeds.iter().map(|s| s.0).collect();
+    let mut goal: Option<(usize, usize)> = None;
+    let mut deepest: (f32, usize, usize) = (-1.0, seeds[0].0, seeds[0].1);
+    let mut visited = std::collections::HashSet::new();
+    while let Some(QItem { cost, piece, entry }) = heap.pop() {
+        let st = idx(piece, entry);
+        if !visited.insert(st) {
+            continue;
+        }
+        if cost > deepest.0 {
+            deepest = (cost, piece, entry);
+        }
+        if !seed_set.contains(&piece)
+            && target(piece)
+            && (pieces[piece].ports.len() != 2 || entry == 0)
+        {
+            goal = Some((piece, entry));
+            break;
+        }
+        let p = &pieces[piece];
+        for exit in 0..p.ports.len().min(16) {
+            if exit == entry {
+                continue;
+            }
+            if p.fixed_path.is_some() && p.ports.len() == 2 && exit != 1 - entry {
+                continue;
+            }
+            let d_in = p.dirs[entry];
+            let d_out = p.dirs[exit];
+            let turn = if (d_in.0 * d_out.0 + d_in.1 * d_out.1) < -0.5 {
+                0.0
+            } else {
+                0.6
+            };
+            let out = p.ports[exit];
+            let mut targets: Vec<((usize, usize), f32, usize)> = vec![];
+            for cells in 0..=MAX_GAP_CELLS {
+                let probe = (
+                    out.0 + d_out.0 * CELL * cells as f32,
+                    out.1 + d_out.1 * CELL * cells as f32,
+                );
+                if let Some(v) = by_point.get(&key(probe)) {
+                    for &(j, k) in v {
+                        if j == piece || blocked.contains(&j) {
+                            continue;
+                        }
+                        let dj = pieces[j].dirs[k];
+                        if dj.0 * d_out.0 + dj.1 * d_out.1 > -0.5 {
+                            continue;
+                        }
+                        let dy = (pieces[j].y - p.y).abs();
+                        if dy > 24.0 {
+                            continue;
+                        }
+                        targets.push(((j, k), 1.0 + turn + cells as f32 * 2.0 + dy * 0.2, cells));
+                    }
+                    if !targets.is_empty() {
+                        break;
+                    }
+                }
+            }
+            for ((j, k), c, cells) in targets {
+                let nst = idx(j, k);
+                let nc = cost + c;
+                if nc < *dist.get(&nst).unwrap_or(&f32::INFINITY) {
+                    dist.insert(nst, nc);
+                    prev.insert(nst, (piece, entry, exit));
+                    gapc.insert(nst, if cells > 0 { 1 } else { 0 });
+                    heap.push(QItem {
+                        cost: nc,
+                        piece: j,
+                        entry: k,
+                    });
+                }
+            }
+        }
+    }
+    let (end_piece, end_entry, reached) = match goal {
+        Some((p, e)) => (p, e, true),
+        None => (deepest.1, deepest.2, false),
+    };
+    let last_exit = opposite_port(&pieces[end_piece], end_entry);
+    let mut seq: Vec<(usize, usize, usize)> = vec![(end_piece, end_entry, last_exit)];
+    let mut gaps = 0usize;
+    let mut cur = (end_piece, end_entry);
+    let mut guard = 0;
+    while let Some(&(pp, pe, px)) = prev.get(&idx(cur.0, cur.1)) {
+        gaps += gapc.get(&idx(cur.0, cur.1)).copied().unwrap_or(0);
+        seq.push((pp, pe, px));
+        cur = (pp, pe);
+        guard += 1;
+        if guard > 100_000 {
+            break;
+        }
+    }
+    seq.reverse();
+    Stage {
+        seq,
+        reached,
+        gaps,
+        end: (end_piece, last_exit),
+    }
+}
+
 struct Chain {
     /// (piece, entry port, exit port)
     seq: Vec<(usize, usize, usize)>,
@@ -285,8 +438,115 @@ struct Chain {
     score: (u32, u32),
 }
 
+/// Chain from a seed: if it is a start block, route through every reachable
+/// checkpoint (greedy nearest-next) and then to a finish; otherwise route to
+/// a finish or as deep as possible.
+fn chain_from(
+    pieces: &[Piece],
+    by_point: &HashMap<(i32, i32), Vec<(usize, usize)>>,
+    s: usize,
+    checkpoints: &[usize],
+) -> Chain {
+    let is_finish =
+        |i: usize| matches!(pieces[i].marker, Some(Marker::Finish | Marker::StartFinish));
+    let seed_is_start = matches!(pieces[s].marker, Some(Marker::Start | Marker::StartFinish));
+    // seed states: a start block is left through its top port (entered "from" the bottom)
+    let seeds: Vec<(usize, usize)> = if seed_is_start && pieces[s].ports.len() == 2 {
+        vec![(s, 0)]
+    } else {
+        (0..pieces[s].ports.len().min(16)).map(|e| (s, e)).collect()
+    };
+    let mut blocked: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut seq: Vec<(usize, usize, usize)> = vec![];
+    let mut gaps = 0;
+    let mut cur_seeds = seeds;
+    let mut remaining: Vec<usize> = if seed_is_start {
+        checkpoints.to_vec()
+    } else {
+        vec![]
+    };
+    let mut finished = false;
+    loop {
+        let targets_left = !remaining.is_empty();
+        let target = |i: usize| {
+            if targets_left {
+                remaining.contains(&i)
+            } else {
+                is_finish(i)
+            }
+        };
+        let st = dijkstra(pieces, by_point, &cur_seeds, &target, &blocked);
+        // append (skip the seed piece if it is already the tail of seq)
+        let skip = if seq.is_empty() { 0 } else { 1 };
+        for &(p, a, b) in st.seq.iter().skip(skip) {
+            seq.push((p, a, b));
+            if pieces[p].fixed_path.is_some() {
+                blocked.insert(p);
+            }
+        }
+        if seq.is_empty() {
+            seq = st.seq.clone();
+        }
+        gaps += st.gaps;
+        if !st.reached {
+            if targets_left && seq.len() > 1 {
+                // no checkpoint reachable from here: give up on the remaining
+                // checkpoints and head for the finish from where we are
+                remaining.clear();
+                let (p, a, _b) = *seq.last().unwrap();
+                cur_seeds = vec![(p, a)];
+                let st2 = dijkstra(pieces, by_point, &cur_seeds, &|i| is_finish(i), &blocked);
+                for &(pp, aa, bb) in st2.seq.iter().skip(1) {
+                    seq.push((pp, aa, bb));
+                }
+                gaps += st2.gaps;
+                finished = st2.reached;
+            }
+            break;
+        }
+        if targets_left {
+            remaining.retain(|&c| c != st.end.0);
+            cur_seeds = vec![(st.end.0, opposite_port(&pieces[st.end.0], st.end.1))];
+            // continue from the checkpoint: we entered at `entry`, leave via `exit`
+            let (p, a, _b) = *seq.last().unwrap();
+            cur_seeds = vec![(p, a)];
+            let _ = st.end;
+            if remaining.is_empty() && seq.len() > 1 {
+                // now route to the finish from the checkpoint we are in
+                continue;
+            }
+            continue;
+        }
+        finished = true;
+        break;
+    }
+    let from_start = seed_is_start;
+    let metres: f32 = seq
+        .iter()
+        .map(|&(pi, a, b)| {
+            let path = path_through(&pieces[pi], a, b);
+            path.windows(2)
+                .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
+                .sum::<f32>()
+        })
+        .sum();
+    let score = (
+        0u32,
+        (metres + if finished { 300.0 } else { 0.0 } + if from_start { 100.0 } else { 0.0 }) as u32,
+    );
+    if std::env::var("RTI_CHAIN_DEBUG").is_ok() {
+        let p0 = pieces[s].ports[0];
+        eprintln!("seed {s} at ({:.0},{:.0}) marker {:?}: pieces {} metres {:.0} finished {finished} score {:?}", p0.0, p0.1, pieces[s].marker, seq.len(), metres, score);
+    }
+    Chain {
+        seq,
+        finished,
+        gaps,
+        score,
+    }
+}
+
 fn chain(pieces: &[Piece]) -> Chain {
-    // port index: location → (piece, port)
     let mut by_point: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
     for (i, p) in pieces.iter().enumerate() {
         for (k, &pt) in p.ports.iter().enumerate() {
@@ -294,16 +554,18 @@ fn chain(pieces: &[Piece]) -> Chain {
         }
     }
     let n = pieces.len();
-    // state = (piece, entry port); "entry" of a start = virtual port usize::MAX handled by trying each exit
     let starts: Vec<usize> = pieces
         .iter()
         .enumerate()
         .filter(|(_, p)| matches!(p.marker, Some(Marker::Start | Marker::StartFinish)))
         .map(|(i, _)| i)
         .collect();
-    // seeds: start markers, plus every piece with a port that has no
-    // neighbour (dead ends), so a road that is not attached to a start block
-    // (jumps, free blocks, unrecognised connectors) still gets chained
+    let checkpoints: Vec<usize> = pieces
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| matches!(p.marker, Some(Marker::Checkpoint)))
+        .map(|(i, _)| i)
+        .collect();
     let mut seeds: Vec<usize> = starts.clone();
     for (i, p) in pieces.iter().enumerate() {
         if seeds.len() > 4000 {
@@ -324,195 +586,20 @@ fn chain(pieces: &[Piece]) -> Chain {
             seeds.push(i);
         }
     }
-    let mut best: Option<Chain> = None;
     let candidates: Vec<usize> = if seeds.is_empty() {
         (0..n).collect()
     } else {
         seeds
     };
-    let _ = &starts;
+    let mut best: Option<Chain> = None;
     for s in candidates {
-        // Dijkstra from s (entry = any port; we enter at port e meaning we leave via the others)
-        let idx = |piece: usize, entry: usize| piece * 16 + entry;
-        let mut dist: HashMap<usize, f32> = HashMap::new();
-        let mut prev: HashMap<usize, (usize, usize, usize)> = HashMap::new(); // state → (prev piece, prev entry, prev exit)
-        let mut gapc: HashMap<usize, usize> = HashMap::new();
-        let mut heap = BinaryHeap::new();
-        for e in 0..pieces[s].ports.len().min(16) {
-            dist.insert(idx(s, e), 0.0);
-            heap.push(QItem {
-                cost: 0.0,
-                piece: s,
-                entry: e,
-            });
-        }
-        let mut goal: Option<(usize, usize)> = None;
-        let mut deepest: (f32, usize, usize) = (-1.0, s, 0);
-        let mut visited = std::collections::HashSet::new();
-        while let Some(QItem { cost, piece, entry }) = heap.pop() {
-            let st = idx(piece, entry);
-            if !visited.insert(st) {
-                continue;
-            }
-            if cost > deepest.0 {
-                deepest = (cost, piece, entry);
-            }
-            if piece != s
-                && matches!(
-                    pieces[piece].marker,
-                    Some(Marker::Finish | Marker::StartFinish)
-                )
-            {
-                goal = Some((piece, entry));
-                break;
-            }
-            let p = &pieces[piece];
-            for exit in 0..p.ports.len().min(16) {
-                if exit == entry {
-                    continue;
-                }
-                // two-port pieces: only the other port; open: any other port
-                if p.fixed_path.is_some() && p.ports.len() == 2 && exit != 1 - entry {
-                    continue;
-                }
-                let d_in = p.dirs[entry];
-                let d_out = p.dirs[exit];
-                let turn = if (d_in.0 * d_out.0 + d_in.1 * d_out.1) < -0.5 {
-                    0.0
-                } else {
-                    0.6
-                };
-                let out = p.ports[exit];
-                let mut targets: Vec<((usize, usize), f32, usize)> = vec![];
-                for cells in 0..=MAX_GAP_CELLS {
-                    let probe = (
-                        out.0 + d_out.0 * CELL * cells as f32,
-                        out.1 + d_out.1 * CELL * cells as f32,
-                    );
-                    if let Some(v) = by_point.get(&key(probe)) {
-                        for &(j, k) in v {
-                            if j == piece {
-                                continue;
-                            }
-                            // the other piece's port must face us
-                            let dj = pieces[j].dirs[k];
-                            if dj.0 * d_out.0 + dj.1 * d_out.1 > -0.5 {
-                                continue;
-                            }
-                            let dy = (pieces[j].y - p.y).abs();
-                            if dy > 24.0 {
-                                continue;
-                            }
-                            targets.push((
-                                (j, k),
-                                1.0 + turn + cells as f32 * 2.0 + dy * 0.2,
-                                cells,
-                            ));
-                        }
-                        if !targets.is_empty() {
-                            break;
-                        }
-                    }
-                }
-                for ((j, k), c, cells) in targets {
-                    let nst = idx(j, k);
-                    let nc = cost + c;
-                    if nc < *dist.get(&nst).unwrap_or(&f32::INFINITY) {
-                        dist.insert(nst, nc);
-                        prev.insert(nst, (piece, entry, exit));
-                        gapc.insert(nst, if cells > 0 { 1 } else { 0 });
-                        heap.push(QItem {
-                            cost: nc,
-                            piece: j,
-                            entry: k,
-                        });
-                    }
-                }
-            }
-        }
-        let (end_piece, end_entry, finished) = match goal {
-            Some((p, e)) => (p, e, true),
-            None => (deepest.1, deepest.2, false),
-        };
-        // reconstruct
-        let mut seq: Vec<(usize, usize, usize)> = vec![];
-        let mut gaps = 0usize;
-        let mut cur = (end_piece, end_entry);
-        // exit of the last piece: for a finish, the port opposite the entry (or any other)
-        let last_exit = {
-            let p = &pieces[end_piece];
-            if p.ports.len() == 2 {
-                1 - end_entry
-            } else {
-                (0..p.ports.len())
-                    .find(|&x| {
-                        x != end_entry
-                            && (p.dirs[x].0 * p.dirs[end_entry].0
-                                + p.dirs[x].1 * p.dirs[end_entry].1)
-                                < -0.5
-                    })
-                    .unwrap_or(end_entry)
-            }
-        };
-        seq.push((end_piece, end_entry, last_exit));
-        let mut guard = 0;
-        while let Some(&(pp, pe, px)) = prev.get(&idx(cur.0, cur.1)) {
-            gaps += gapc.get(&idx(cur.0, cur.1)).copied().unwrap_or(0);
-            seq.push((pp, pe, px));
-            cur = (pp, pe);
-            guard += 1;
-            if guard > 100_000 {
-                break;
-            }
-        }
-        seq.reverse();
-        // the start piece: enter from the port opposite to its exit
-        if let Some(first) = seq.first_mut() {
-            let p = &pieces[first.0];
-            if p.ports.len() == 2 {
-                first.1 = 1 - first.2;
-            } else {
-                first.1 = (0..p.ports.len())
-                    .find(|&x| {
-                        x != first.2
-                            && (p.dirs[x].0 * p.dirs[first.2].0 + p.dirs[x].1 * p.dirs[first.2].1)
-                                < -0.5
-                    })
-                    .unwrap_or(first.1);
-            }
-        }
-        let from_start = matches!(pieces[s].marker, Some(Marker::Start | Marker::StartFinish));
-        // longer chains win; finishing and starting at a start block are bonuses
-        // score in metres: road length plus bonuses for reaching a finish and starting at a start block
-        let metres: f32 = seq
-            .iter()
-            .map(|&(pi, a, b)| {
-                let path = path_through(&pieces[pi], a, b);
-                path.windows(2)
-                    .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
-                    .sum::<f32>()
-            })
-            .sum();
-        let score = (
-            0u32,
-            (metres + if finished { 300.0 } else { 0.0 } + if from_start { 100.0 } else { 0.0 })
-                as u32,
-        );
-        if std::env::var("RTI_CHAIN_DEBUG").is_ok() {
-            let p0 = pieces[s].ports[0];
-            eprintln!("seed {s} at ({:.0},{:.0}) marker {:?}: pieces {} metres {:.0} finished {finished} score {:?}", p0.0, p0.1, pieces[s].marker, seq.len(), metres, score);
-        }
+        let c = chain_from(pieces, &by_point, s, &checkpoints);
         let better = match &best {
             None => true,
-            Some(b) => score > b.score,
+            Some(b) => c.score > b.score,
         };
         if better {
-            best = Some(Chain {
-                seq,
-                finished,
-                gaps,
-                score,
-            });
+            best = Some(c);
         }
     }
     best.unwrap_or(Chain {
@@ -659,6 +746,41 @@ pub fn compile_track_with(
         }
     }
     anyhow::ensure!(nodes.len() >= 2, "compiled track has fewer than two nodes");
+    // The car spawns near the exit edge of the start block (about 2 m before
+    // the start line, measured on tiny maps with known replay times); race
+    // distance is counted from there. Trim the polyline accordingly.
+    if report.start_found {
+        let mut cut = START_SPAWN_M;
+        let mut i = 0;
+        while i + 1 < nodes.len() {
+            let seg = ((nodes[i + 1].x - nodes[i].x).powi(2)
+                + (nodes[i + 1].y - nodes[i].y).powi(2))
+            .sqrt();
+            if cut < seg {
+                let t = cut / seg;
+                let a = nodes[i];
+                let b = nodes[i + 1];
+                nodes[i] = TrackNode {
+                    x: a.x + (b.x - a.x) * t,
+                    y: a.y + (b.y - a.y) * t,
+                    half_width: a.half_width,
+                    surface: a.surface,
+                };
+                break;
+            }
+            cut -= seg;
+            i += 1;
+        }
+        if i > 0 && i < nodes.len() {
+            nodes.drain(0..i);
+            for c in checkpoints.iter_mut() {
+                *c = c.saturating_sub(i);
+            }
+            if let Some(f) = finish.as_mut() {
+                *f = f.saturating_sub(i);
+            }
+        }
+    }
     let mut track = Track {
         name: name.to_string(),
         description: format!(
